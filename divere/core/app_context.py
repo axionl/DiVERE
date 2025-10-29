@@ -1610,7 +1610,7 @@ class ApplicationContext(QObject):
                 return
 
             # 计算调整量（梯度下降，基于比值误差）
-            learning_rate = 0.5*g_mean
+            learning_rate = 0.7*g_mean
             r_error = current_r_ratio - target_r_ratio
             b_error = current_b_ratio - target_b_ratio
 
