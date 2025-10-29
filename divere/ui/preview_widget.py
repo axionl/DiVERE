@@ -1915,26 +1915,37 @@ class PreviewWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             # 优先级0：中性点选择模式（最高优先级）
             if self.neutral_point_selection_mode:
-                # 将点击位置转换为归一化坐标
-                orig_point = self._display_to_original_point(event.position())
-                if orig_point is not None and self.current_image and self.current_image.metadata:
-                    source_wh = self.current_image.metadata.get('source_wh')
-                    if source_wh:
-                        src_w, src_h = source_wh
-                        norm_x = orig_point[0] / src_w
-                        norm_y = orig_point[1] / src_h
+                # 直接从preview图像取色，不转换到原图坐标
+                # 这样点击位置、光标位置、取色位置始终一致，不受裁剪/旋转/聚焦影响
+                if self.current_image and self.current_image.array is not None:
+                    try:
+                        # 显示坐标 → preview图像坐标
+                        mx, my = float(event.position().x()), float(event.position().y())
+                        img_x = (mx - self.pan_x) / self.zoom_factor
+                        img_y = (my - self.pan_y) / self.zoom_factor
 
-                        # 保存选定的中性点
-                        self.neutral_point_norm = (norm_x, norm_y)
+                        # preview图像尺寸
+                        img_h, img_w = self.current_image.array.shape[:2]
 
-                        # 退出选择模式
-                        self.exit_neutral_point_selection_mode()
+                        # 转换为归一化坐标（基于preview图像）
+                        norm_x = img_x / img_w
+                        norm_y = img_y / img_h
 
-                        # 发射信号，通知已选择中性点
-                        self.neutral_point_selected.emit(norm_x, norm_y)
+                        # 边界检查
+                        if 0 <= norm_x <= 1 and 0 <= norm_y <= 1:
+                            # 保存选定的中性点
+                            self.neutral_point_norm = (norm_x, norm_y)
 
-                        event.accept()
-                        return
+                            # 退出选择模式
+                            self.exit_neutral_point_selection_mode()
+
+                            # 发射信号，通知已选择中性点
+                            self.neutral_point_selected.emit(norm_x, norm_y)
+
+                            event.accept()
+                            return
+                    except Exception as e:
+                        print(f"中性点选择失败: {e}")
 
             # 记录点击时间，用于双击检测
             current_time = self._double_click_timer.remainingTime()
@@ -2533,16 +2544,18 @@ class PreviewWidget(QWidget):
 
     def _draw_neutral_point_overlay(self, painter: QPainter):
         """绘制中性点标记（靶心样式）"""
-        if not self.neutral_point_norm:
+        if not self.neutral_point_norm or not self.current_image or self.current_image.array is None:
             return
 
         try:
-            # 将归一化坐标转换为显示坐标
-            display_coords = self._norm_to_display_coords([self.neutral_point_norm])
-            if not display_coords:
-                return
+            # preview归一化坐标 → 图像坐标
+            # painter已经应用了transform（translate + scale），直接使用图像坐标
+            norm_x, norm_y = self.neutral_point_norm
+            img_h, img_w = self.current_image.array.shape[:2]
 
-            x, y = display_coords[0]
+            # 直接使用图像坐标，让painter的transform处理缩放和平移
+            x = norm_x * img_w
+            y = norm_y * img_h
 
             # 绘制靶心标记
             painter.save()
