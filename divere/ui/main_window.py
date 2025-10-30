@@ -98,6 +98,10 @@ class MainWindow(QMainWindow):
         self._preview_pending: bool = False
         self._preview_seq_counter: int = 0
 
+        # CCM 优化相关的临时引用（避免闭包内存泄漏）
+        self._ccm_worker: Optional[QRunnable] = None
+        self._ccm_progress_dialog: Optional[object] = None  # CMAESProgressDialog
+
         # 最后，初始化参数面板的默认值
         self.parameter_panel.initialize_defaults(self.context.get_current_params())
         
@@ -172,7 +176,8 @@ class MainWindow(QMainWindow):
         # 连接旋转完成信号
         self.context.rotation_completed.connect(self._on_rotation_completed)
         try:
-            self.context.preview_updated.connect(lambda _: self._update_apply_contactsheet_enabled())
+            # 使用命名方法替代 lambda 闭包，避免内存泄漏
+            self.context.preview_updated.connect(self._on_preview_updated_for_contactsheet)
         except Exception:
             pass
         try:
@@ -1079,7 +1084,7 @@ class MainWindow(QMainWindow):
         # 创建线程安全的状态回调，使用信号/槽机制
         def thread_safe_status_callback(message: str):
             print(f"[DEBUG] 收到状态回调: '{message}'")
-            
+
             # 使用线程安全的信号机制更新进度对话框
             # 这确保所有UI更新都在主线程中执行
             try:
@@ -1087,115 +1092,160 @@ class MainWindow(QMainWindow):
                 print(f"[DEBUG] 通过信号更新进度对话框")
             except Exception as e:
                 print(f"[DEBUG] 信号更新失败，使用QTimer备用方案: {e}")
-                # 备用方案：使用QTimer确保主线程执行
-                def update_progress_dialog(msg=message):
-                    try:
-                        if progress_dialog and progress_dialog.isVisible():
-                            progress_dialog.request_update_progress(msg)
-                    except Exception as ex:
-                        print(f"[DEBUG] 备用方案也失败: {ex}")
-                
-                QTimer.singleShot(0, update_progress_dialog)
-        
+                # 备用方案：使用 functools.partial 避免闭包内存泄漏
+                from functools import partial
+                update_func = partial(self._ccm_update_progress_fallback, progress_dialog, message)
+                QTimer.singleShot(0, update_func)
+
         worker = _CCMWorker(
-            source_image.array, 
-            cc_corners_source, 
-            input_gamma, 
-            use_mat, 
-            corr_mat, 
-            sharpening_config, 
-            ui_params, 
+            source_image.array,
+            cc_corners_source,
+            input_gamma,
+            use_mat,
+            corr_mat,
+            sharpening_config,
+            ui_params,
             thread_safe_status_callback,
             color_space_manager=self.context.color_space_manager,
             working_colorspace=self.context.color_space_manager.get_current_working_space(),
             app_context=self.context
         )
 
-        def _on_done():
-            try:
-                if worker.error:
+        # 注意：原来的 _on_done 和 _poll 闭包已经移动到类方法：
+        # _ccm_on_optimization_done 和 _ccm_poll_worker_completion
+
+        print(f"[DEBUG] 启动Worker线程")
+
+        # 存储 worker 和 progress_dialog 的引用（用于类方法访问）
+        self._ccm_worker = worker
+        self._ccm_progress_dialog = progress_dialog
+
+        self.context.thread_pool.start(worker)
+        print(f"[DEBUG] 启动轮询检查")
+        # 使用类方法替代闭包，避免内存泄漏
+        QTimer.singleShot(150, self._ccm_poll_worker_completion)
+
+    def _ccm_update_progress_fallback(self, progress_dialog, message):
+        """CCM 优化进度更新的备用方法（替代闭包）
+
+        用于 QTimer.singleShot 的备用方案，避免闭包内存泄漏
+        """
+        try:
+            if progress_dialog and progress_dialog.isVisible():
+                progress_dialog.request_update_progress(message)
+        except Exception as ex:
+            print(f"[DEBUG] 备用方案更新进度失败: {ex}")
+
+    def _ccm_poll_worker_completion(self):
+        """轮询检测 CCM 优化任务完成（替代闭包）
+
+        这是一个类方法，用于替代 _poll 闭包，避免内存泄漏
+        """
+        if not self._ccm_worker:
+            print(f"[DEBUG] _ccm_poll: worker 已清理，停止轮询")
+            return
+
+        has_result = getattr(self._ccm_worker, 'result', None) is not None
+        has_error = getattr(self._ccm_worker, 'error', None) is not None
+        print(f"[DEBUG] _ccm_poll: has_result={has_result}, has_error={has_error}")
+
+        if has_result or has_error:
+            print(f"[DEBUG] Worker完成，调用_ccm_on_optimization_done")
+            self._ccm_on_optimization_done()
+            return
+
+        # 继续轮询
+        QTimer.singleShot(150, self._ccm_poll_worker_completion)
+
+    def _ccm_on_optimization_done(self):
+        """CCM 优化完成的处理（替代闭包）
+
+        这是一个类方法，用于替代 _on_done 闭包，避免内存泄漏
+        """
+        worker = self._ccm_worker
+        progress_dialog = self._ccm_progress_dialog
+
+        if not worker or not progress_dialog:
+            print(f"[DEBUG] _ccm_on_optimization_done: worker 或 progress_dialog 为 None")
+            return
+
+        try:
+            if worker.error:
+                # 结束优化状态
+                self.context.set_ccm_optimization_active(False)
+                progress_dialog.finish_optimization(False)
+                QMessageBox.critical(self, "优化失败", worker.error)
+                self.statusBar().showMessage("光谱锐化（硬件校正）优化失败")
+                return
+
+            res = worker.result or {}
+            params_dict = res.get('parameters', {})
+
+            # 获取当前输入空间名称（用于后续处理）
+            cs_name = self.context.get_input_color_space()
+
+            # 获取光谱锐化配置（从 worker 的 config 属性）
+            sharpening_config = worker.config
+
+            # 只有启用IDT优化时才处理primaries结果
+            if sharpening_config.optimize_idt_transformation:
+                primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
+                if primaries_xy is None or primaries_xy.shape != (3, 2):
                     # 结束优化状态
                     self.context.set_ccm_optimization_active(False)
                     progress_dialog.finish_optimization(False)
-                    QMessageBox.critical(self, "优化失败", worker.error)
-                    self.statusBar().showMessage("光谱锐化（硬件校正）优化失败")
+                    QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
+                    self.statusBar().showMessage("光谱锐化（硬件校正）优化完成但结果无效")
                     return
-                res = worker.result or {}
-                params_dict = res.get('parameters', {})
-                
-                # 只有启用IDT优化时才处理primaries结果
-                if sharpening_config.optimize_idt_transformation:
-                    primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
-                    if primaries_xy is None or primaries_xy.shape != (3, 2):
-                        # 结束优化状态
-                        self.context.set_ccm_optimization_active(False)
-                        progress_dialog.finish_optimization(False)
-                        QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
-                        self.statusBar().showMessage("光谱锐化（硬件校正）优化完成但结果无效")
-                        return
 
-                    # 注册并切换到自定义输入色彩空间
-                    base_name = cs_name.replace("_custom", "").replace("_preset", "")
-                    custom_name = f"{base_name}_custom"
-                    self.context.color_space_manager.register_custom_colorspace(custom_name, primaries_xy, None, gamma=1.0)
-                    # 使用专用入口以便重建代理
-                    self.context.set_input_color_space(custom_name)
-                    
-                    # 更新UCS widget显示优化后的primaries
-                    from divere.core.color_space import xy_to_uv
-                    coords_uv = {}
-                    for i, key in enumerate(['R', 'G', 'B']):
-                        if i < len(primaries_xy):
-                            x, y = primaries_xy[i]
-                            u, v = xy_to_uv(x, y)
-                            coords_uv[key] = (u, v)
-                    
-                    if len(coords_uv) == 3:
-                        self.parameter_panel.ucs_widget.set_uv_coordinates(coords_uv)
+                # 注册并切换到自定义输入色彩空间
+                base_name = cs_name.replace("_custom", "").replace("_preset", "")
+                custom_name = f"{base_name}_custom"
+                self.context.color_space_manager.register_custom_colorspace(custom_name, primaries_xy, None, gamma=1.0)
+                # 使用专用入口以便重建代理
+                self.context.set_input_color_space(custom_name)
 
-                # 应用其他参数更新
-                new_params = self.context.get_current_params().copy()
-                # 密度参数与RB对数增益
-                new_params.density_gamma = float(params_dict.get('gamma', new_params.density_gamma))
-                new_params.density_dmax = float(params_dict.get('dmax', new_params.density_dmax))
-                r_gain = float(params_dict.get('r_gain', new_params.rgb_gains[0]))
-                b_gain = float(params_dict.get('b_gain', new_params.rgb_gains[2]))
-                new_params.rgb_gains = (r_gain, new_params.rgb_gains[1], b_gain)
-                
-                # 应用优化的density_matrix（如果有）
-                if 'density_matrix' in params_dict and params_dict['density_matrix'] is not None:
-                    new_params.density_matrix = params_dict['density_matrix']
-                    new_params.enable_density_matrix = True
-                    new_params.density_matrix_name = "optimized_custom"
+                # 更新UCS widget显示优化后的primaries
+                from divere.core.color_space import xy_to_uv
+                coords_uv = {}
+                for i, key in enumerate(['R', 'G', 'B']):
+                    if i < len(primaries_xy):
+                        x, y = primaries_xy[i]
+                        u, v = xy_to_uv(x, y)
+                        coords_uv[key] = (u, v)
 
-                self.context.update_params(new_params)
-                final_log_rmse = float(res.get('rmse', 0.0))
-                
-                # 结束优化状态
-                self.context.set_ccm_optimization_active(False)
-                progress_dialog.finish_optimization(True, final_log_rmse)
-                
-                completion_message = f"光谱锐化（硬件校正）完成：最终log-RMSE={final_log_rmse:.4f}"
-                self.statusBar().showMessage(completion_message)
-                print(f"[DEBUG] 优化完成，显示消息: '{completion_message}'")
-            finally:
-                pass
+                if len(coords_uv) == 3:
+                    self.parameter_panel.ucs_widget.set_uv_coordinates(coords_uv)
 
-        # 轮询检测任务完成（简化型）。
-        def _poll():
-            has_result = getattr(worker, 'result', None) is not None
-            has_error = getattr(worker, 'error', None) is not None
-            print(f"[DEBUG] _poll: has_result={has_result}, has_error={has_error}")
-            if has_result or has_error:
-                print(f"[DEBUG] Worker完成，调用_on_done")
-                _on_done()
-                return
-            QTimer.singleShot(150, _poll)
+            # 应用其他参数更新
+            new_params = self.context.get_current_params().copy()
+            # 密度参数与RB对数增益
+            new_params.density_gamma = float(params_dict.get('gamma', new_params.density_gamma))
+            new_params.density_dmax = float(params_dict.get('dmax', new_params.density_dmax))
+            r_gain = float(params_dict.get('r_gain', new_params.rgb_gains[0]))
+            b_gain = float(params_dict.get('b_gain', new_params.rgb_gains[2]))
+            new_params.rgb_gains = (r_gain, new_params.rgb_gains[1], b_gain)
 
-        print(f"[DEBUG] 启动Worker线程")
-        self.context.thread_pool.start(worker)
-        print(f"[DEBUG] 启动轮询检查")
-        QTimer.singleShot(150, _poll)
+            # 应用优化的density_matrix（如果有）
+            if 'density_matrix' in params_dict and params_dict['density_matrix'] is not None:
+                new_params.density_matrix = params_dict['density_matrix']
+                new_params.enable_density_matrix = True
+                new_params.density_matrix_name = "optimized_custom"
+
+            self.context.update_params(new_params)
+            final_log_rmse = float(res.get('rmse', 0.0))
+
+            # 结束优化状态
+            self.context.set_ccm_optimization_active(False)
+            progress_dialog.finish_optimization(True, final_log_rmse)
+
+            completion_message = f"光谱锐化（硬件校正）完成：最终log-RMSE={final_log_rmse:.4f}"
+            self.statusBar().showMessage(completion_message)
+            print(f"[DEBUG] 优化完成，显示消息: '{completion_message}'")
+        finally:
+            # 清理临时引用，释放内存
+            self._ccm_worker = None
+            self._ccm_progress_dialog = None
 
     def _on_save_custom_colorspace_requested(self, primaries_dict: dict):
         """保存 UCS 三角的基色坐标为输入色彩变换 JSON（项目config目录）。"""
@@ -2285,22 +2335,38 @@ class MainWindow(QMainWindow):
         self.preview_widget.set_image(result_image)
         # 图像加载后自动适应窗口（保持旧逻辑兼容）
         if self._fit_after_next_preview:
-            try:
-                # 确保图像设置完成后再适应窗口
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, self.preview_widget.fit_to_window)
-            finally:
-                self._fit_after_next_preview = False
-        
+            self._fit_after_next_preview = False
+            self._schedule_fit_to_window()
+
         # 新的精确控制fit时机
         if self._should_fit_after_image_load or self._should_fit_after_rotation:
-            try:
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, self.preview_widget.fit_to_window)
-            finally:
-                self._should_fit_after_image_load = False
-                self._should_fit_after_rotation = False
+            self._should_fit_after_image_load = False
+            self._should_fit_after_rotation = False
+            self._schedule_fit_to_window()
+
         # 更新工具可用性
+        try:
+            self._update_apply_contactsheet_enabled()
+        except Exception:
+            pass
+
+    def _schedule_fit_to_window(self):
+        """延迟执行 fit_to_window，确保图像设置完成后再适应窗口
+
+        使用 QTimer.singleShot(0) 将调用推迟到事件循环的下一轮
+        这避免了在图像设置过程中立即调整窗口，确保布局完成
+        """
+        try:
+            QTimer.singleShot(0, self.preview_widget.fit_to_window)
+        except Exception as e:
+            print(f"[WARNING] _schedule_fit_to_window 失败: {e}")
+
+    def _on_preview_updated_for_contactsheet(self, _image_data):
+        """预览更新时同步更新接触印相按钮状态
+
+        这是一个命名方法，用于替代 lambda 闭包，避免内存泄漏
+        忽略 _image_data 参数，因为只需要更新按钮状态
+        """
         try:
             self._update_apply_contactsheet_enabled()
         except Exception:
@@ -2772,7 +2838,88 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message, timeout)
         except Exception:
             pass
-        
+
+    def closeEvent(self, event):
+        """窗口关闭时的清理工作
+
+        Qt 会自动断开对象销毁时的信号连接，但我们需要：
+        1. 停止所有定时器
+        2. 停止后台线程池
+        3. 清理缓存资源
+        4. 显式断开全局对象的信号连接（ApplicationContext）
+        """
+        print("[DEBUG] MainWindow.closeEvent: 开始清理资源")
+
+        # 1. 停止 ApplicationContext 的后台处理
+        try:
+            # 停止自动保存定时器
+            if hasattr(self.context, '_autosave_timer') and self.context._autosave_timer:
+                self.context._autosave_timer.stop()
+
+            # 等待线程池完成当前任务（最多等待1秒）
+            if hasattr(self.context, 'thread_pool') and self.context.thread_pool:
+                self.context.thread_pool.waitForDone(1000)
+
+            print("[DEBUG] ApplicationContext 清理完成")
+        except Exception as e:
+            print(f"[WARNING] ApplicationContext 清理失败: {e}")
+
+        # 2. 清理 PreviewWidget 的定时器
+        try:
+            if hasattr(self, 'preview_widget') and self.preview_widget:
+                self.preview_widget.cleanup()
+            print("[DEBUG] PreviewWidget 定时器清理完成")
+        except Exception as e:
+            print(f"[WARNING] PreviewWidget 清理失败: {e}")
+
+        # 3. 清理缓存（可选，释放内存）
+        try:
+            if hasattr(self.context, 'image_manager') and self.context.image_manager:
+                self.context.image_manager.clear_cache()
+            if (hasattr(self.context, 'the_enlarger') and self.context.the_enlarger and
+                hasattr(self.context.the_enlarger, 'lut_processor')):
+                self.context.the_enlarger.lut_processor.clear_cache()
+            if hasattr(self.context, 'color_space_manager') and self.context.color_space_manager:
+                self.context.color_space_manager.clear_convert_cache()
+
+            print("[DEBUG] 缓存清理完成")
+        except Exception as e:
+            print(f"[WARNING] 缓存清理失败: {e}")
+
+        # 4. 显式断开 ApplicationContext 的信号连接（高风险连接）
+        # 注意：这一步在大多数情况下不是必需的，因为 Qt 会自动处理
+        # 但为了保险起见，我们显式断开全局对象的连接
+        try:
+            # 使用列表收集所有信号，避免在断开时出错
+            signals_to_disconnect = [
+                (self.context.preview_updated, self),
+                (self.context.status_message_changed, self),
+                (self.context.image_loaded, self),
+                (self.context.autosave_requested, self),
+                (self.context.curves_config_reloaded, self),
+                (self.context.rotation_completed, self),
+                (self.context.crop_changed, self),
+                (self.context.film_type_changed, self),
+            ]
+
+            for signal, receiver in signals_to_disconnect:
+                try:
+                    # 尝试断开与指定接收者相关的所有连接
+                    # disconnect() 不带参数会断开所有连接，我们只想断开与 self 相关的
+                    # 但 PySide6 的 disconnect 不支持 receiver 参数，所以使用 try-except
+                    signal.disconnect(self)
+                except (RuntimeError, TypeError):
+                    # 信号可能已经断开或无连接
+                    pass
+
+            print("[DEBUG] ApplicationContext 信号断开完成")
+        except Exception as e:
+            print(f"[WARNING] 信号断开失败: {e}")
+
+        # 5. 调用父类的 closeEvent
+        super().closeEvent(event)
+        print("[DEBUG] MainWindow.closeEvent: 清理完成")
+
 # 移除 Worker 相关类定义
 # class _PreviewWorkerSignals(QObject): ...
 # class _PreviewWorker(QRunnable): ...

@@ -3551,3 +3551,33 @@ class PreviewWidget(QWidget):
             
         except Exception as e:
             print(f"Focused模式裁剪编辑错误: {e}")
+
+    def cleanup(self):
+        """清理资源，防止内存泄漏
+
+        停止所有 QTimer 实例，防止在对象销毁后仍然触发回调
+        这个方法应该在 MainWindow.closeEvent 中调用
+        """
+        try:
+            if hasattr(self, 'smooth_drag_timer') and self.smooth_drag_timer:
+                self.smooth_drag_timer.stop()
+                self.smooth_drag_timer.deleteLater()
+                self.smooth_drag_timer = None
+        except Exception as e:
+            print(f"[WARNING] smooth_drag_timer 清理失败: {e}")
+
+        try:
+            if hasattr(self, '_double_click_timer') and self._double_click_timer:
+                self._double_click_timer.stop()
+                self._double_click_timer.deleteLater()
+                self._double_click_timer = None
+        except Exception as e:
+            print(f"[WARNING] _double_click_timer 清理失败: {e}")
+
+        try:
+            if hasattr(self, '_ants_timer') and self._ants_timer:
+                self._ants_timer.stop()
+                self._ants_timer.deleteLater()
+                self._ants_timer = None
+        except Exception as e:
+            print(f"[WARNING] _ants_timer 清理失败: {e}")
