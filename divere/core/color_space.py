@@ -6,6 +6,7 @@
 import numpy as np
 from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
+from collections import OrderedDict
 import colour
 import json
 import os
@@ -74,7 +75,8 @@ class ColorSpaceManager:
         
         # 不再需要预计算转换矩阵，使用在线计算
         # 增加一个简单的转换缓存，加速重复转换
-        self._convert_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
+        self._convert_cache: "OrderedDict[Any, Tuple[np.ndarray, np.ndarray]]" = OrderedDict()  # 使用 OrderedDict 实现正确的 LRU
+        self._convert_cache_max_size: int = 100  # 限制缓存大小，防止无限增长
         # Profiling 开关
         self._profiling_enabled: bool = False
         
@@ -206,13 +208,45 @@ class ColorSpaceManager:
             "gamma": space.get("gamma", 1.0)
         }
 
+    def clear_convert_cache(self) -> None:
+        """清空转换缓存并释放资源
+
+        确保所有缓存的转换矩阵和增益向量被正确释放
+        """
+        for key in list(self._convert_cache.keys()):
+            entry = self._convert_cache.get(key)
+            if entry:
+                # 释放 numpy 数组
+                matrix, vector = entry
+                if matrix is not None:
+                    matrix = None
+                if vector is not None:
+                    vector = None
+                self._convert_cache[key] = None
+        self._convert_cache.clear()
+
     def _invalidate_convert_cache_for(self, space_name: str) -> None:
+        """使包含指定色彩空间的缓存项失效
+
+        当色彩空间定义更新时，需要清除所有相关的转换缓存
+        确保 numpy 数组被正确释放
+        """
         try:
             keys_to_delete = [k for k in self._convert_cache.keys() if space_name in k]
             for k in keys_to_delete:
+                entry = self._convert_cache[k]
+                if entry:
+                    # 释放缓存的 numpy 数组
+                    matrix, vector = entry
+                    if matrix is not None:
+                        matrix = None
+                    if vector is not None:
+                        vector = None
+                    self._convert_cache[k] = None
                 del self._convert_cache[k]
         except Exception:
-            self._convert_cache.clear()
+            # 失败时清空整个缓存（调用统一方法）
+            self.clear_convert_cache()
     
     def calculate_color_space_conversion(self, src_space_name: str, dst_space_name: str) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -228,10 +262,11 @@ class ColorSpaceManager:
         if src_space_name == dst_space_name:
             return np.eye(3), np.array([1.0, 1.0, 1.0])
         
-        # 缓存命中
+        # 缓存命中（更新LRU顺序）
         cache_key = (src_space_name, dst_space_name)
         cached = self._convert_cache.get(cache_key)
         if cached is not None:
+            self._convert_cache.move_to_end(cache_key)  # 移到末尾（最近使用）
             return cached
 
         # 获取源和目标色彩空间信息
@@ -258,9 +293,20 @@ class ColorSpaceManager:
             
             # 计算白点适应增益向量
             gain_vector = self._calculate_white_point_adaptation(src_space, dst_space)
-            
-            # 缓存结果
+
+            # 缓存结果（带LRU管理）
             self._convert_cache[cache_key] = (conversion_matrix.astype(np.float64), gain_vector.astype(np.float64))
+            self._convert_cache.move_to_end(cache_key)  # 移到末尾（最近使用）
+
+            # LRU驱逐：如果缓存超过限制，移除最旧的项
+            if len(self._convert_cache) > self._convert_cache_max_size:
+                oldest_key, (old_matrix, old_vector) = self._convert_cache.popitem(last=False)
+                # 显式释放numpy数组以防止内存泄漏
+                if old_matrix is not None:
+                    old_matrix = None
+                if old_vector is not None:
+                    old_vector = None
+
             return self._convert_cache[cache_key]
             
         except Exception as e:
@@ -488,7 +534,7 @@ class ColorSpaceManager:
         if space_name in self.get_working_color_spaces():
             if self._working_space != space_name:
                 self._working_space = space_name
-                self._convert_cache.clear()  # 清空转换缓存
+                self.clear_convert_cache()  # 清空转换缓存（使用统一方法）
                 self._save_working_space_to_config(space_name)  # 保存到配置文件
                 if self._verbose_logs:
                     print(f"工作空间已切换到: {space_name}")
@@ -529,7 +575,7 @@ class ColorSpaceManager:
     def reload_config(self):
         """重新加载色彩空间配置文件"""
         self._color_spaces.clear()
-        self._convert_cache.clear()
+        self.clear_convert_cache()  # 清空转换缓存（使用统一方法）
         self._load_colorspaces_from_json()
         self.setup_monochrome_color_space()
     

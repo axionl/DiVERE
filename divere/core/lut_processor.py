@@ -5,6 +5,7 @@ LUT生成和应用
 
 import numpy as np
 from typing import Optional
+from collections import OrderedDict
 import time
 
 from .data_types import LUT3D, ImageData, ColorGradingParams
@@ -13,10 +14,10 @@ from .the_enlarger import TheEnlarger
 
 class LUTProcessor:
     """LUT处理器"""
-    
+
     def __init__(self, the_enlarger: TheEnlarger):
         self.the_enlarger = the_enlarger
-        self._lut_cache = {}
+        self._lut_cache: "OrderedDict[str, LUT3D]" = OrderedDict()  # 使用 OrderedDict 实现正确的 LRU
         self._max_cache_size = 20
     
     def generate_preview_lut(self, params: ColorGradingParams, size: int = 32) -> LUT3D:
@@ -259,17 +260,40 @@ class LUTProcessor:
         return str(hash(param_str))
     
     def _cache_lut(self, key: str, lut: LUT3D):
-        """缓存LUT"""
-        # 简单的LRU缓存
-        if len(self._lut_cache) >= self._max_cache_size:
-            # 移除最旧的缓存项
-            oldest_key = next(iter(self._lut_cache))
-            del self._lut_cache[oldest_key]
-        
+        """缓存LUT（正确的LRU实现）
+
+        使用 OrderedDict 的 LRU 特性：
+        - move_to_end() 将最近使用的项移到末尾
+        - popitem(last=False) 移除最旧的项（队首）
+        """
         self._lut_cache[key] = lut
+        self._lut_cache.move_to_end(key)  # 移到末尾（最近使用）
+
+        if len(self._lut_cache) > self._max_cache_size:
+            # 移除最旧的项（队首）
+            oldest_key, oldest_lut = self._lut_cache.popitem(last=False)
+            # 显式释放 LUT 对象以防止内存泄漏
+            if oldest_lut is not None:
+                # LUT3D 对象持有 numpy array，显式释放
+                if hasattr(oldest_lut, 'data') and oldest_lut.data is not None:
+                    oldest_lut.data = None
+                oldest_lut = None
     
     def clear_cache(self):
-        """清空LUT缓存"""
+        """清空LUT缓存并释放资源
+
+        确保所有缓存的 LUT 对象及其持有的 numpy 数组被正确释放
+        """
+        # 显式释放所有 LUT 对象
+        for key in list(self._lut_cache.keys()):
+            lut = self._lut_cache[key]
+            if lut is not None:
+                # 释放 LUT 持有的 numpy array
+                if hasattr(lut, 'data') and lut.data is not None:
+                    lut.data = None
+                # 释放 LUT 对象引用
+                self._lut_cache[key] = None
+        # 清空字典
         self._lut_cache.clear()
     
     def get_cache_info(self) -> dict:

@@ -7,6 +7,7 @@ import os
 import hashlib
 from typing import Optional, Dict, Tuple
 from pathlib import Path
+from collections import OrderedDict
 import numpy as np
 import cv2
 from PIL import Image
@@ -18,11 +19,11 @@ from ..utils.app_paths import get_data_dir
 
 class ImageManager:
     """图像管理器"""
-    
+
     def __init__(self, cache_dir: str = ".cache"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
-        self._proxy_cache: Dict[str, ImageData] = {}
+        self._proxy_cache: "OrderedDict[str, ImageData]" = OrderedDict()  # 使用 OrderedDict 实现正确的 LRU
         self._max_cache_size = 10  # 最大缓存图像数量
         
     def load_image(self, file_path: str) -> ImageData:
@@ -340,24 +341,54 @@ class ImageManager:
         return proxy_data
     
     def get_cached_proxy(self, image_id: str) -> Optional[ImageData]:
-        """获取缓存的代理图像"""
-        return self._proxy_cache.get(image_id)
+        """获取缓存的代理图像（更新LRU顺序）
+
+        当缓存命中时，将该项移到末尾，标记为最近使用
+        """
+        proxy = self._proxy_cache.get(image_id)
+        if proxy is not None:
+            self._proxy_cache.move_to_end(image_id)  # 移到末尾（最近使用）
+        return proxy
     
     def cache_proxy(self, image_id: str, proxy: ImageData):
-        """缓存代理图像"""
-        # 简单的LRU缓存实现
-        if len(self._proxy_cache) >= self._max_cache_size:
-            # 移除最旧的缓存项，显式释放以防止内存泄漏
-            oldest_key = next(iter(self._proxy_cache))
-            old_proxy = self._proxy_cache[oldest_key]
-            if old_proxy is not None:
-                del old_proxy
-            del self._proxy_cache[oldest_key]
+        """缓存代理图像（正确的LRU实现）
 
+        使用 OrderedDict 的 LRU 特性：
+        - move_to_end() 将最近使用的项移到末尾
+        - popitem(last=False) 移除最旧的项（队首）
+
+        Proxy 图像可能很大（~17MB），确保旧图像被正确释放
+        """
         self._proxy_cache[image_id] = proxy
+        self._proxy_cache.move_to_end(image_id)  # 移到末尾（最近使用）
+
+        if len(self._proxy_cache) > self._max_cache_size:
+            # 移除最旧的缓存项（队首）
+            oldest_key, old_proxy = self._proxy_cache.popitem(last=False)
+            # 显式释放 ImageData 对象以防止内存泄漏
+            if old_proxy is not None:
+                # ImageData 持有 numpy array（最大内存占用）
+                if old_proxy.array is not None:
+                    old_proxy.array = None  # 释放 numpy 数组（~17MB）
+                # 释放 ImageData 对象引用
+                old_proxy = None
     
     def clear_cache(self):
-        """清空缓存"""
+        """清空缓存并释放资源
+
+        确保所有缓存的 Proxy 图像及其持有的 numpy 数组被正确释放
+        Proxy 图像可能很大（每个 ~17MB），总计可达 ~170MB
+        """
+        # 显式释放所有 Proxy 图像
+        for key in list(self._proxy_cache.keys()):
+            proxy = self._proxy_cache[key]
+            if proxy is not None:
+                # 释放 ImageData 持有的 numpy array（最大内存占用）
+                if proxy.array is not None:
+                    proxy.array = None
+                # 释放 ImageData 对象引用
+                self._proxy_cache[key] = None
+        # 清空字典
         self._proxy_cache.clear()
     
     def get_image_id(self, file_path: str) -> str:
