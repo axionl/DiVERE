@@ -38,9 +38,11 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
+
         # 初始化核心组件
-        self.context = ApplicationContext(self)
+        # 使用 parent=None 而不是 self，避免循环引用 MainWindow ↔ ApplicationContext
+        # ApplicationContext 不需要访问 parent()，所以不设置parent也不影响功能
+        self.context = ApplicationContext(parent=None)
 
         # 导航相关属性
         self.image_file_list = []  # 当前文件夹中的图片文件列表
@@ -2852,13 +2854,15 @@ class MainWindow(QMainWindow):
 
         # 1. 停止 ApplicationContext 的后台处理
         try:
-            # 停止自动保存定时器
-            if hasattr(self.context, '_autosave_timer') and self.context._autosave_timer:
-                self.context._autosave_timer.stop()
-
-            # 等待线程池完成当前任务（最多等待1秒）
-            if hasattr(self.context, 'thread_pool') and self.context.thread_pool:
-                self.context.thread_pool.waitForDone(1000)
+            # 优先使用 ApplicationContext 的 cleanup() 方法（统一清理逻辑）
+            if hasattr(self.context, 'cleanup'):
+                self.context.cleanup()
+            else:
+                # 向后兼容：如果 cleanup 方法不存在，使用旧逻辑
+                if hasattr(self.context, '_autosave_timer') and self.context._autosave_timer:
+                    self.context._autosave_timer.stop()
+                if hasattr(self.context, 'thread_pool') and self.context.thread_pool:
+                    self.context.thread_pool.waitForDone(1000)
 
             print("[DEBUG] ApplicationContext 清理完成")
         except Exception as e:
@@ -2872,17 +2876,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[WARNING] PreviewWidget 清理失败: {e}")
 
-        # 3. 清理缓存（可选，释放内存）
+        # 3. 缓存清理（已由 ApplicationContext.cleanup() 处理）
+        # 注意：缓存清理现在集成在 ApplicationContext.cleanup() 中
+        # 保留这段代码作为向后兼容（如果 cleanup() 方法不存在或失败）
         try:
-            if hasattr(self.context, 'image_manager') and self.context.image_manager:
-                self.context.image_manager.clear_cache()
-            if (hasattr(self.context, 'the_enlarger') and self.context.the_enlarger and
-                hasattr(self.context.the_enlarger, 'lut_processor')):
-                self.context.the_enlarger.lut_processor.clear_cache()
-            if hasattr(self.context, 'color_space_manager') and self.context.color_space_manager:
-                self.context.color_space_manager.clear_convert_cache()
-
-            print("[DEBUG] 缓存清理完成")
+            # 只有在 ApplicationContext 没有 cleanup 方法时才执行这里的清理
+            if not hasattr(self.context, 'cleanup'):
+                if hasattr(self.context, 'image_manager') and self.context.image_manager:
+                    self.context.image_manager.clear_cache()
+                if (hasattr(self.context, 'the_enlarger') and self.context.the_enlarger and
+                    hasattr(self.context.the_enlarger, 'lut_processor')):
+                    self.context.the_enlarger.lut_processor.clear_cache()
+                if hasattr(self.context, 'color_space_manager') and self.context.color_space_manager:
+                    self.context.color_space_manager.clear_convert_cache()
+                print("[DEBUG] 缓存清理完成（向后兼容路径）")
         except Exception as e:
             print(f"[WARNING] 缓存清理失败: {e}")
 

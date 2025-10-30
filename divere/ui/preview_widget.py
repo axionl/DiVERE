@@ -3581,3 +3581,16 @@ class PreviewWidget(QWidget):
                 self._ants_timer = None
         except Exception as e:
             print(f"[WARNING] _ants_timer 清理失败: {e}")
+
+    def __del__(self):
+        """析构函数：确保资源被清理
+
+        作为最后一道防线，即使 cleanup() 没有被显式调用
+        注意：__del__ 的调用时机不确定，不应该依赖它进行关键清理
+        """
+        try:
+            # 只清理关键资源，避免在析构时做复杂操作
+            self.cleanup()
+        except Exception:
+            # 析构函数中不应该抛出异常
+            pass

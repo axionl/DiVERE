@@ -99,9 +99,11 @@ class ApplicationContext(QObject):
         self.film_type_controller = FilmTypeController()
         self.folder_navigator = FolderNavigator(self.image_manager)
         self.auto_preset_manager = AutoPresetManager()
-        
-        # 为ColorSpaceManager添加ApplicationContext引用，以便CCMOptimizer访问共享数据
-        self.color_space_manager.context = self
+
+        # 注意：ColorSpaceManager 不需要 context 引用
+        # CCMOptimizer 通过 app_context 参数直接传递，不需要通过 color_space_manager.context
+        # 移除此赋值以避免循环引用：ApplicationContext ↔ ColorSpaceManager
+        # self.color_space_manager.context = self  # 已移除
 
         # =================
         # 状态变量
@@ -1196,7 +1198,8 @@ class ApplicationContext(QObject):
             # 对于黑白类型，强制延迟触发UI状态更新以确保正确禁用控件
             if self.is_monochrome_type():
                 from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._ensure_ui_state_sync_for_monochrome())
+                # 直接传递方法引用，避免 lambda 闭包内存泄漏
+                QTimer.singleShot(0, self._ensure_ui_state_sync_for_monochrome)
         
         # 根据参数决定是否应用胶片类型的默认配置
         if apply_defaults:
@@ -2211,6 +2214,84 @@ class ApplicationContext(QObject):
             self._preview_pending = backup.get('preview_pending', False)
             
             print("Context状态已恢复")
-            
+
         except Exception as e:
             print(f"恢复状态失败: {e}")
+
+    def cleanup(self):
+        """清理 ApplicationContext 的资源，防止内存泄漏
+
+        停止定时器，清理缓存，等待线程池完成
+        这个方法应该在 ApplicationContext 不再使用时调用（如窗口关闭时）
+        """
+        print("[DEBUG] ApplicationContext.cleanup: 开始清理资源")
+
+        # 1. 停止自动保存定时器
+        try:
+            if hasattr(self, '_autosave_timer') and self._autosave_timer:
+                self._autosave_timer.stop()
+                self._autosave_timer.deleteLater()
+                self._autosave_timer = None
+            print("[DEBUG] _autosave_timer 清理完成")
+        except Exception as e:
+            print(f"[WARNING] _autosave_timer 清理失败: {e}")
+
+        # 2. 等待线程池完成当前任务
+        try:
+            if hasattr(self, 'thread_pool') and self.thread_pool:
+                # 最多等待1秒，避免阻塞过久
+                self.thread_pool.waitForDone(1000)
+            print("[DEBUG] thread_pool 等待完成")
+        except Exception as e:
+            print(f"[WARNING] thread_pool 清理失败: {e}")
+
+        # 3. 清理 ImageManager 缓存
+        try:
+            if hasattr(self, 'image_manager') and self.image_manager:
+                self.image_manager.clear_cache()
+            print("[DEBUG] image_manager 缓存清理完成")
+        except Exception as e:
+            print(f"[WARNING] image_manager 缓存清理失败: {e}")
+
+        # 4. 清理 LUTProcessor 缓存
+        try:
+            if (hasattr(self, 'the_enlarger') and self.the_enlarger and
+                hasattr(self.the_enlarger, 'lut_processor') and self.the_enlarger.lut_processor):
+                self.the_enlarger.lut_processor.clear_cache()
+            print("[DEBUG] lut_processor 缓存清理完成")
+        except Exception as e:
+            print(f"[WARNING] lut_processor 缓存清理失败: {e}")
+
+        # 5. 清理 ColorSpaceManager 转换缓存
+        try:
+            if hasattr(self, 'color_space_manager') and self.color_space_manager:
+                self.color_space_manager.clear_convert_cache()
+            print("[DEBUG] color_space_manager 缓存清理完成")
+        except Exception as e:
+            print(f"[WARNING] color_space_manager 缓存清理失败: {e}")
+
+        # 6. 显式释放大型对象引用
+        try:
+            if hasattr(self, '_current_image') and self._current_image:
+                self._current_image = None
+            if hasattr(self, '_current_proxy') and self._current_proxy:
+                self._current_proxy = None
+            print("[DEBUG] 大型对象引用清理完成")
+        except Exception as e:
+            print(f"[WARNING] 对象引用清理失败: {e}")
+
+        print("[DEBUG] ApplicationContext.cleanup: 清理完成")
+
+    def __del__(self):
+        """析构函数：确保资源被清理
+
+        作为最后一道防线，即使 cleanup() 没有被显式调用
+        注意：__del__ 的调用时机不确定，不应该依赖它进行关键清理
+        """
+        try:
+            # 只清理关键资源，避免在析构时做复杂操作
+            if hasattr(self, '_autosave_timer') and self._autosave_timer:
+                self._autosave_timer.stop()
+        except Exception:
+            # 析构函数中不应该抛出异常
+            pass
