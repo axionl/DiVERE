@@ -38,7 +38,13 @@ os.environ['OMP_NUM_THREADS'] = '1'
 
 # 取消OpenCV图像像素限制，允许加载超大图像
 # 设置为0表示无限制（OpenCV默认限制约1.79亿像素）
+# 注意：此环境变量在某些Windows系统上可能不生效，但image_manager.py会额外配置PIL限制
 os.environ['OPENCV_IO_MAX_IMAGE_PIXELS'] = '0'
+
+# 验证环境变量设置（可选的调试信息）
+if '--debug' in sys.argv or '-v' in sys.argv:
+    print(f"[DiVERE] OpenCV pixel limit env var: {os.environ.get('OPENCV_IO_MAX_IMAGE_PIXELS')}")
+    print(f"[DiVERE] Platform: {platform.system()} {platform.release()}")
 
 # 添加项目根目录到Python路径（开发环境下使用）
 project_root = Path(__file__).parent.parent

@@ -16,6 +16,14 @@ import imageio
 from .data_types import ImageData
 from ..utils.app_paths import get_data_dir
 
+# 配置PIL的图像大小限制
+# 默认情况下PIL限制为178,956,970像素以防止decompression bomb攻击
+# 对于胶片扫描，我们需要处理更大的图像（如228M像素的扫描图）
+# 设置为None表示无限制，或设置为更大的值（如500M像素）
+PIL_MAX_PIXELS = None #500_000_000  # 500M像素，足够大但仍有安全边界
+Image.MAX_IMAGE_PIXELS = PIL_MAX_PIXELS
+print(f"[ImageManager] PIL maximum image pixels set to: {PIL_MAX_PIXELS:,} ({PIL_MAX_PIXELS/1_000_000:.1f}M pixels)")
+
 
 class ImageManager:
     """图像管理器"""
@@ -151,13 +159,17 @@ class ImageManager:
                 return image_data
             except Exception as e:
                 # 回退到OpenCV路径
+                print(f"[ImageManager] PIL TIFF loading failed, falling back to OpenCV: {type(e).__name__}: {str(e)[:200]}")
                 pass
         
         # 尝试使用OpenCV加载（非TIFF优先走此分支）
+        opencv_error = None
         try:
+            print(f"[ImageManager] Attempting to load image with OpenCV: {file_path.name}")
             image = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
             if image is None:
                 raise ValueError("OpenCV无法加载图像")
+            print(f"[ImageManager] OpenCV successfully loaded image: {image.shape}, dtype={image.dtype}")
             
             # OpenCV使用BGR(A)格式，转换为RGB(A)
             if len(image.shape) == 3:
@@ -228,9 +240,13 @@ class ImageManager:
             
         except Exception as e:
             # 如果OpenCV失败，尝试使用PIL
+            opencv_error = e
+            print(f"[ImageManager] OpenCV loading failed: {type(e).__name__}: {str(e)[:200]}")
+            print(f"[ImageManager] Attempting to load image with PIL (MAX_IMAGE_PIXELS={Image.MAX_IMAGE_PIXELS:,})")
             try:
                 pil_image = Image.open(file_path)
                 original_mode = pil_image.mode
+                print(f"[ImageManager] PIL successfully opened image: size={pil_image.size}, mode={original_mode}")
                 image = np.array(pil_image, dtype=np.float32)
                 
                 # 根据PIL模式进行正确的归一化
@@ -252,9 +268,27 @@ class ImageManager:
                 # 处理灰度图像
                 if len(image.shape) == 2:
                     image = image[:, :, np.newaxis]
-                    
+
             except Exception as e2:
-                raise RuntimeError(f"无法加载图像文件: {e}, {e2}")
+                # 生成详细的错误报告
+                error_msg = f"无法加载图像文件: {file_path.name}\n\n"
+                error_msg += f"图像信息:\n"
+                error_msg += f"  文件路径: {file_path}\n"
+                error_msg += f"  文件大小: {file_path.stat().st_size / (1024*1024):.1f} MB\n"
+                error_msg += f"\nOpenCV错误: {type(opencv_error).__name__}: {str(opencv_error)[:150]}\n"
+                error_msg += f"PIL错误: {type(e2).__name__}: {str(e2)[:150]}\n"
+
+                # 检查是否是像素限制问题
+                if "pixels" in str(opencv_error).lower() or "pixels" in str(e2).lower():
+                    error_msg += f"\n可能的原因: 图像尺寸超过了限制\n"
+                    error_msg += f"  PIL最大像素限制: {Image.MAX_IMAGE_PIXELS:,} ({Image.MAX_IMAGE_PIXELS/1_000_000:.1f}M)\n"
+                    error_msg += f"\n解决方案:\n"
+                    error_msg += f"  1. 尝试用其他工具缩小图像尺寸\n"
+                    error_msg += f"  2. 检查图像文件是否损坏\n"
+                    error_msg += f"  3. 如果是Windows系统，可能需要更新OpenCV版本\n"
+
+                print(f"[ImageManager] FATAL: {error_msg}")
+                raise RuntimeError(error_msg)
         
         # 检测单/双通道图像并标记
         if len(image.shape) == 3:
@@ -274,7 +308,15 @@ class ImageManager:
             original_channels=original_channels,
             is_monochrome_source=is_monochrome_source
         )
-        
+
+        # 输出加载成功的信息
+        h, w = image.shape[:2]
+        total_pixels = h * w
+        print(f"[ImageManager] Successfully loaded image: {file_path.name}")
+        print(f"[ImageManager]   Size: {w}x{h} ({total_pixels:,} pixels = {total_pixels/1_000_000:.1f}M)")
+        print(f"[ImageManager]   Channels: {original_channels}, Monochrome: {is_monochrome_source}")
+        print(f"[ImageManager]   Data range: [{image.min():.4f}, {image.max():.4f}]")
+
         return image_data
     
     def generate_proxy(self, image: ImageData, max_size: Tuple[int, int] = (2000, 2000)) -> ImageData:
