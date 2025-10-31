@@ -20,9 +20,10 @@ from ..utils.app_paths import get_data_dir
 # 默认情况下PIL限制为178,956,970像素以防止decompression bomb攻击
 # 对于胶片扫描，我们需要处理更大的图像（如228M像素的扫描图）
 # 设置为None表示无限制，或设置为更大的值（如500M像素）
-PIL_MAX_PIXELS = None #500_000_000  # 500M像素，足够大但仍有安全边界
-Image.MAX_IMAGE_PIXELS = PIL_MAX_PIXELS
-print(f"[ImageManager] PIL maximum image pixels set to: {PIL_MAX_PIXELS:,} ({PIL_MAX_PIXELS/1_000_000:.1f}M pixels)")
+#PIL_MAX_PIXELS = 500_000_000  # 500M像素，足够大但仍有安全边界
+Image.MAX_IMAGE_PIXELS = None
+#print(f"[ImageManager] PIL maximum image pixels set to: {PIL_MAX_PIXELS:,} ({PIL_MAX_PIXELS/1_000_000:.1f}M pixels)")
+print(f"[ImageManager] PIL maximum image pixels set to: Infinite pixels)")
 
 
 class ImageManager:
