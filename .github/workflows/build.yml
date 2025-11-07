@@ -165,6 +165,9 @@ jobs:
           --collect-all cupy \
           --collect-all tifffile \
           --collect-all imagecodecs \
+          --copy-metadata imageio \
+          --copy-metadata colour-science \
+          --copy-metadata scipy \
           --hidden-import "scipy.interpolate" \
           --hidden-import "scipy.optimize" \
           --hidden-import "scipy.ndimage" \
