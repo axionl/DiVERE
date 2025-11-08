@@ -894,38 +894,12 @@ class ApplicationContext(QObject):
                     new_params.enable_density_matrix = True
 
         if preset.density_curve:
+            # 只设置曲线名称，所有曲线数据已经通过 from_dict(preset.grading_params) 正确加载
+            # 原则：预设中有什么就加载什么，不做任何额外判断或按名称重新加载
             new_params.density_curve_name = preset.density_curve.name
-            # 若预设自带点，但为单位曲线 [(0,0),(1,1)]，按“无点”处理并尝试按名称加载
-            def _is_identity_curve(points):
-                try:
-                    return (
-                        isinstance(points, (list, tuple)) and len(points) == 2 and
-                        float(points[0][0]) == 0.0 and float(points[0][1]) == 0.0 and
-                        float(points[1][0]) == 1.0 and float(points[1][1]) == 1.0
-                    )
-                except Exception:
-                    return False
 
-            has_points = bool(preset.density_curve.points)
-            if has_points and not _is_identity_curve(preset.density_curve.points):
-                new_params.curve_points = preset.density_curve.points
-                new_params.enable_density_curve = True
-            else:
-                # 无点或单位曲线：尝试根据名称加载实际曲线
-                try:
-                    loaded = self._load_density_curve_points_by_name(preset.density_curve.name)
-                    if loaded:
-                        if 'RGB' in loaded and loaded['RGB']:
-                            new_params.curve_points = loaded['RGB']
-                        if 'R' in loaded and loaded['R']:
-                            new_params.curve_points_r = loaded['R']
-                        if 'G' in loaded and loaded['G']:
-                            new_params.curve_points_g = loaded['G']
-                        if 'B' in loaded and loaded['B']:
-                            new_params.curve_points_b = loaded['B']
-                        new_params.enable_density_curve = True
-                except Exception:
-                    pass
+            # 如果预设中包含了曲线启用标志，from_dict已经设置了
+            # 这里不需要额外处理
         
         # 在更新参数前先设置orientation，避免预览闪烁
         try:
@@ -1055,35 +1029,9 @@ class ApplicationContext(QObject):
                         if matrix is not None:
                             params.enable_density_matrix = True
                 if entry.preset.density_curve:
+                    # 只设置曲线名称，所有曲线数据已经通过 from_dict 正确加载
+                    # 原则：预设中有什么就加载什么，不做任何额外判断或按名称重新加载
                     params.density_curve_name = entry.preset.density_curve.name
-                    def _is_identity_curve(points):
-                        try:
-                            return (
-                                isinstance(points, (list, tuple)) and len(points) == 2 and
-                                float(points[0][0]) == 0.0 and float(points[0][1]) == 0.0 and
-                                float(points[1][0]) == 1.0 and float(points[1][1]) == 1.0
-                            )
-                        except Exception:
-                            return False
-                    has_points = bool(entry.preset.density_curve.points)
-                    if has_points and not _is_identity_curve(entry.preset.density_curve.points):
-                        params.curve_points = entry.preset.density_curve.points
-                        params.enable_density_curve = True
-                    else:
-                        try:
-                            loaded = self._load_density_curve_points_by_name(entry.preset.density_curve.name)
-                            if loaded:
-                                if 'RGB' in loaded and loaded['RGB']:
-                                    params.curve_points = loaded['RGB']
-                                if 'R' in loaded and loaded['R']:
-                                    params.curve_points_r = loaded['R']
-                                if 'G' in loaded and loaded['G']:
-                                    params.curve_points_g = loaded['G']
-                                if 'B' in loaded and loaded['B']:
-                                    params.curve_points_b = loaded['B']
-                                params.enable_density_curve = True
-                        except Exception:
-                            pass
 
                 self._per_crop_params[cid] = params
             # 活跃裁剪（仅记录，不自动聚焦）

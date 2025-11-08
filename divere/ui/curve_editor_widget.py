@@ -87,14 +87,17 @@ class CurveEditWidget(QWidget):
         """设置曲线控制点"""
         if channel is None:
             channel = self.current_channel
-        
+
+        # 规范化channel键名：统一转换为大写，避免大小写不匹配问题
+        channel = channel.upper() if channel else self.current_channel
+
         if channel in self.curves:
             # 确保所有点都是tuple格式，并按x坐标排序
             normalized_points = []
             for point in points:
                 if isinstance(point, (list, tuple)) and len(point) >= 2:
                     normalized_points.append((float(point[0]), float(point[1])))
-            
+
             self.curves[channel] = sorted(normalized_points, key=lambda p: p[0])
             if channel == self.current_channel:
                 self.control_points = self.curves[channel]
@@ -116,14 +119,16 @@ class CurveEditWidget(QWidget):
     def set_all_curves(self, curves: Dict[str, List[Tuple[float, float]]], emit_signal: bool = True):
         """设置所有通道的曲线"""
         for channel, points in curves.items():
-            if channel in self.curves:
+            # 规范化channel键名：统一转换为大写，避免大小写不匹配问题
+            channel_upper = channel.upper()
+            if channel_upper in self.curves:
                 # 确保所有点都是tuple格式，并按x坐标排序
                 normalized_points = []
                 for point in points:
                     if isinstance(point, (list, tuple)) and len(point) >= 2:
                         normalized_points.append((float(point[0]), float(point[1])))
-                
-                self.curves[channel] = sorted(normalized_points, key=lambda p: p[0])
+
+                self.curves[channel_upper] = sorted(normalized_points, key=lambda p: p[0])
         
         # 更新当前显示的曲线
         if self.current_channel in self.curves:
