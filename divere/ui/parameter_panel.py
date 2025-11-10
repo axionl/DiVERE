@@ -440,6 +440,71 @@ class ParameterPanel(QWidget):
         
         matrix_layout.addLayout(combo_layout)
         matrix_layout.addLayout(matrix_grid)
+
+        # === 矩阵辅助调整控件 ===
+        helper_label = QLabel("辅助调整:")
+        matrix_layout.addWidget(helper_label)
+
+        helper_grid = QGridLayout()
+        helper_grid.setSpacing(5)
+
+        # 保存按钮引用以便状态管理
+        self.matrix_helper_buttons = []
+
+        channel_names = ["红通道", "绿通道", "蓝通道"]
+
+        for col in range(3):
+            # 列标题
+            channel_label = QLabel(channel_names[col])
+            channel_label.setAlignment(Qt.AlignCenter)
+            helper_grid.addWidget(channel_label, 0, col * 2, 1, 2)
+
+            # 纯度标签
+            purity_label = QLabel("纯度:")
+            helper_grid.addWidget(purity_label, 1, col * 2)
+
+            # 纯度按钮
+            purity_layout = QHBoxLayout()
+            purity_layout.setSpacing(2)
+            purity_minus = QPushButton("-")
+            purity_minus.setFixedWidth(30)
+            purity_minus.setToolTip(f"减少{channel_names[col]}纯度（主元素-0.01，辅元素各+0.005）")
+            purity_plus = QPushButton("+")
+            purity_plus.setFixedWidth(30)
+            purity_plus.setToolTip(f"增加{channel_names[col]}纯度（主元素+0.01，辅元素各-0.005）")
+            purity_layout.addWidget(purity_minus)
+            purity_layout.addWidget(purity_plus)
+            purity_layout.setContentsMargins(0, 0, 0, 0)
+            helper_grid.addLayout(purity_layout, 1, col * 2 + 1)
+
+            # 色相标签
+            hue_label = QLabel("色相:")
+            helper_grid.addWidget(hue_label, 2, col * 2)
+
+            # 色相按钮
+            hue_layout = QHBoxLayout()
+            hue_layout.setSpacing(2)
+            hue_left = QPushButton("<")
+            hue_left.setFixedWidth(30)
+            hue_left.setToolTip(f"{channel_names[col]}色相调整（上辅元素+0.01，下辅元素-0.01）")
+            hue_right = QPushButton(">")
+            hue_right.setFixedWidth(30)
+            hue_right.setToolTip(f"{channel_names[col]}色相调整（下辅元素+0.01，上辅元素-0.01）")
+            hue_layout.addWidget(hue_left)
+            hue_layout.addWidget(hue_right)
+            hue_layout.setContentsMargins(0, 0, 0, 0)
+            helper_grid.addLayout(hue_layout, 2, col * 2 + 1)
+
+            # 保存按钮引用
+            self.matrix_helper_buttons.extend([purity_minus, purity_plus, hue_left, hue_right])
+
+            # 连接信号
+            purity_minus.clicked.connect(lambda checked=False, c=col: self._adjust_purity(c, increase=False))
+            purity_plus.clicked.connect(lambda checked=False, c=col: self._adjust_purity(c, increase=True))
+            hue_left.clicked.connect(lambda checked=False, c=col: self._adjust_hue(c, increase_down=False))
+            hue_right.clicked.connect(lambda checked=False, c=col: self._adjust_hue(c, increase_down=True))
+
+        matrix_layout.addLayout(helper_grid)
         layout.addWidget(matrix_group)
 
         # === 分层反差组（新增） ===
@@ -1102,13 +1167,17 @@ class ParameterPanel(QWidget):
         for i in range(3):
             for j in range(3):
                 self.matrix_editor_widgets[i][j].setEnabled(enabled)
-        
+
         # 控制矩阵下拉菜单
         self.matrix_combo.setEnabled(enabled)
-        
+
         # 控制启用复选框
         self.enable_density_matrix_checkbox.setEnabled(enabled)
         self.enable_density_matrix_checkbox.setVisible(visible)
+
+        # 控制矩阵辅助调整按钮
+        for button in self.matrix_helper_buttons:
+            button.setEnabled(enabled)
     
     def _set_rgb_gains_ui_state(self, enabled: bool, visible: bool):
         """设置RGB增益控件组状态"""
@@ -1780,11 +1849,107 @@ class ParameterPanel(QWidget):
         if not self.enable_density_matrix_checkbox.isChecked():
             # 用户开始编辑矩阵时，自动启用矩阵
             self.enable_density_matrix_checkbox.setChecked(True)
-        
+
         # 检查是否修改，并添加星号标记
         if self._is_matrix_modified():
             self._mark_as_modified(self.matrix_combo)
 
+        self.parameter_changed.emit()
+
+    def _adjust_purity(self, col_index: int, increase: bool = True):
+        """调整矩阵列的纯度
+
+        纯度调整会改变主元素（对角线元素）与辅元素的值。
+        主元素增加步长，两个辅元素各减少步长的一半。
+
+        Args:
+            col_index: 列索引 (0=红通道, 1=绿通道, 2=蓝通道)
+            increase: True=增加纯度（主元素增加），False=减少纯度
+        """
+        if self._is_updating_ui:
+            return
+
+        step = 0.01 if increase else -0.01
+        half_step = step / 2.0
+        main_idx = col_index  # 主元素索引（对角线元素）
+
+        # 读取当前列的所有值
+        col_values = [self.matrix_editor_widgets[i][col_index].value() for i in range(3)]
+
+        # 调整主元素
+        col_values[main_idx] += step
+
+        # 调整辅元素（两个辅元素各减少步长的一半）
+        for i in range(3):
+            if i != main_idx:
+                col_values[i] -= half_step
+
+        # 更新UI
+        self._is_updating_ui = True
+        try:
+            for i in range(3):
+                self.matrix_editor_widgets[i][col_index].setValue(col_values[i])
+        finally:
+            self._is_updating_ui = False
+
+        # 自动启用矩阵并标记为修改
+        if not self.enable_density_matrix_checkbox.isChecked():
+            self.enable_density_matrix_checkbox.setChecked(True)
+        if self._is_matrix_modified():
+            self._mark_as_modified(self.matrix_combo)
+
+        # 触发参数更新
+        self.parameter_changed.emit()
+
+    def _adjust_hue(self, col_index: int, increase_down: bool = True):
+        """调整矩阵列的色相
+
+        色相调整会改变两个辅元素的相对比例，主元素保持不变。
+
+        Args:
+            col_index: 列索引 (0=红通道, 1=绿通道, 2=蓝通道)
+            increase_down: True=增下减上（>按钮），False=增上减下（<按钮）
+        """
+        if self._is_updating_ui:
+            return
+
+        step = 0.01
+        main_idx = col_index  # 主元素索引（对角线元素）
+
+        # 计算辅元素索引（按行索引排序）
+        aux_indices = [i for i in range(3) if i != main_idx]
+        upper_idx = aux_indices[0]  # 行索引较小的（上辅助）
+        lower_idx = aux_indices[1]  # 行索引较大的（下辅助）
+
+        # 读取当前值
+        upper_val = self.matrix_editor_widgets[upper_idx][col_index].value()
+        lower_val = self.matrix_editor_widgets[lower_idx][col_index].value()
+
+        # 调整辅元素
+        if increase_down:
+            # > 按钮：增下减上
+            lower_val += step
+            upper_val -= step
+        else:
+            # < 按钮：增上减下
+            upper_val += step
+            lower_val -= step
+
+        # 更新UI
+        self._is_updating_ui = True
+        try:
+            self.matrix_editor_widgets[upper_idx][col_index].setValue(upper_val)
+            self.matrix_editor_widgets[lower_idx][col_index].setValue(lower_val)
+        finally:
+            self._is_updating_ui = False
+
+        # 自动启用矩阵并标记为修改
+        if not self.enable_density_matrix_checkbox.isChecked():
+            self.enable_density_matrix_checkbox.setChecked(True)
+        if self._is_matrix_modified():
+            self._mark_as_modified(self.matrix_combo)
+
+        # 触发参数更新
         self.parameter_changed.emit()
 
     # === 分层反差槽函数（新增） ===
