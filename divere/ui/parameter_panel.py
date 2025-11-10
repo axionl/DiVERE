@@ -1859,8 +1859,9 @@ class ParameterPanel(QWidget):
     def _adjust_purity(self, col_index: int, increase: bool = True):
         """调整矩阵列的纯度
 
-        纯度调整会改变主元素（对角线元素）与辅元素的值。
-        主元素增加步长，两个辅元素各减少步长的一半。
+        纯度调整分为两步：
+        1. 主列操作：主元素增加步长，两个辅元素各减少步长的一半
+        2. 行归一化：调整所有元素使每行的和保持不变
 
         Args:
             col_index: 列索引 (0=红通道, 1=绿通道, 2=蓝通道)
@@ -1869,6 +1870,12 @@ class ParameterPanel(QWidget):
         if self._is_updating_ui:
             return
 
+        # 保存调整前每行的和
+        row_sums_before = [
+            sum(self.matrix_editor_widgets[row][col].value() for col in range(3))
+            for row in range(3)
+        ]
+
         step = 0.01 if increase else -0.01
         half_step = step / 2.0
         main_idx = col_index  # 主元素索引（对角线元素）
@@ -1876,7 +1883,7 @@ class ParameterPanel(QWidget):
         # 读取当前列的所有值
         col_values = [self.matrix_editor_widgets[i][col_index].value() for i in range(3)]
 
-        # 调整主元素
+        # 步骤1: 调整主列
         col_values[main_idx] += step
 
         # 调整辅元素（两个辅元素各减少步长的一半）
@@ -1892,6 +1899,9 @@ class ParameterPanel(QWidget):
         finally:
             self._is_updating_ui = False
 
+        # 步骤2: 行归一化，保持每行的和不变
+        self._normalize_rows_to_preserve_sum(row_sums_before)
+
         # 自动启用矩阵并标记为修改
         if not self.enable_density_matrix_checkbox.isChecked():
             self.enable_density_matrix_checkbox.setChecked(True)
@@ -1904,7 +1914,9 @@ class ParameterPanel(QWidget):
     def _adjust_hue(self, col_index: int, increase_down: bool = True):
         """调整矩阵列的色相
 
-        色相调整会改变两个辅元素的相对比例，主元素保持不变。
+        色相调整分为两步：
+        1. 主列操作：改变两个辅元素的相对比例，主元素保持不变
+        2. 行归一化：调整所有元素使每行的和保持不变
 
         Args:
             col_index: 列索引 (0=红通道, 1=绿通道, 2=蓝通道)
@@ -1912,6 +1924,12 @@ class ParameterPanel(QWidget):
         """
         if self._is_updating_ui:
             return
+
+        # 保存调整前每行的和
+        row_sums_before = [
+            sum(self.matrix_editor_widgets[row][col].value() for col in range(3))
+            for row in range(3)
+        ]
 
         step = 0.01
         main_idx = col_index  # 主元素索引（对角线元素）
@@ -1925,7 +1943,7 @@ class ParameterPanel(QWidget):
         upper_val = self.matrix_editor_widgets[upper_idx][col_index].value()
         lower_val = self.matrix_editor_widgets[lower_idx][col_index].value()
 
-        # 调整辅元素
+        # 步骤1: 调整辅元素
         if increase_down:
             # > 按钮：增下减上
             lower_val += step
@@ -1943,6 +1961,9 @@ class ParameterPanel(QWidget):
         finally:
             self._is_updating_ui = False
 
+        # 步骤2: 行归一化，保持每行的和不变
+        self._normalize_rows_to_preserve_sum(row_sums_before)
+
         # 自动启用矩阵并标记为修改
         if not self.enable_density_matrix_checkbox.isChecked():
             self.enable_density_matrix_checkbox.setChecked(True)
@@ -1951,6 +1972,34 @@ class ParameterPanel(QWidget):
 
         # 触发参数更新
         self.parameter_changed.emit()
+
+    def _normalize_rows_to_preserve_sum(self, row_sums_before):
+        """行归一化：使每行的和恢复到调整前的值
+
+        在矩阵列调整后，对每一行应用缩放系数，使该行的和保持不变。
+
+        Args:
+            row_sums_before: 调整前每行的和（长度为3的列表）
+        """
+        self._is_updating_ui = True
+        try:
+            for row_i in range(3):
+                # 计算当前行的和
+                row_sum_after = sum(
+                    self.matrix_editor_widgets[row_i][col].value() for col in range(3)
+                )
+
+                # 计算缩放系数并应用
+                if abs(row_sum_after) > 1e-12:  # 避免除零
+                    scale = row_sums_before[row_i] / row_sum_after
+
+                    # 该行所有元素乘以scale
+                    for col_j in range(3):
+                        old_val = self.matrix_editor_widgets[row_i][col_j].value()
+                        new_val = old_val * scale
+                        self.matrix_editor_widgets[row_i][col_j].setValue(new_val)
+        finally:
+            self._is_updating_ui = False
 
     # === 分层反差槽函数（新增） ===
     def _on_channel_gamma_r_slider_changed(self, value: int):
