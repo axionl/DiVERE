@@ -111,12 +111,15 @@ class ShortcutsBinder(QObject):
     # ---------- 内置动作（不再依赖主窗实现） ----------
     # 导航
     def _act_go_prev(self):
+        self.host._show_status_message("⏳正在切换到上一张照片...")
         self.host.preview_widget.context.folder_navigator.navigate_previous()
+        self.host.preview_widget._emit_switch_profile('contactsheet', None)
         self.host._show_status_message("已切换到上一张照片")
 
     def _act_go_next(self):
         self.host._show_status_message("⏳正在切换到下一张照片...")
         self.host.preview_widget.context.folder_navigator.navigate_next()
+        self.host.preview_widget._emit_switch_profile('contactsheet', None)
         self.host._show_status_message("已切换到下一张照片")
 
     # 旋转
