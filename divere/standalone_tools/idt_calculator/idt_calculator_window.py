@@ -293,15 +293,15 @@ class IDTCalculatorWindow(QMainWindow):
                     working_spaces.sort()
                 self.workspace_combo.addItems(working_spaces)
                 
-                # 设置默认选择为ACEScg
-                if "ACEScg" in working_spaces:
-                    index = working_spaces.index("ACEScg")
+                # 设置默认选择为KodakEnduraPremier
+                if "KodakEnduraPremier" in working_spaces:
+                    index = working_spaces.index("KodakEnduraPremier")
                     self.workspace_combo.setCurrentIndex(index)
                     
             except Exception as e:
                 self._log_message(f"获取工作空间列表失败: {e}")
                 # 添加一些默认选项
-                self.workspace_combo.addItems(["ACEScg", "sRGB", "Kodak2383"])
+                self.workspace_combo.addItems(["ACEScg", "KodakEnduraPremier", "Kodak2383"])
         else:
             # 如果没有ColorSpaceManager，添加默认选项
             self.workspace_combo.addItems(["ACEScg", "sRGB", "Kodak2383"])
