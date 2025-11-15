@@ -1284,11 +1284,18 @@ class PreviewWidget(QWidget):
         was_showing_cutoff = self._show_black_cutoff
         current_compensation = self._cutoff_compensation
 
-        # 显式释放旧的ImageData对象以防止内存泄漏
-        if self.current_image is not None:
-            del self.current_image
+        # 如果传进来的就是当前这张图，不要把它的 array 清掉
+        same_object = (image_data is self.current_image)
 
+        # 显式释放旧的ImageData对象及其numpy array以防止内存泄漏
+        if self.current_image is not None and not same_object:
+            if hasattr(self.current_image, "array") and self.current_image.array is not None:
+                self.current_image.array = None
+            self.current_image = None
+
+        # 挂上新图（同一对象就等于“重绘”）
         self.current_image = image_data
+
         # 若图像元数据中已有裁剪（来自Preset或Context），并且本地未显式覆盖，则创建/同步虚线框
         try:
             md = getattr(image_data, 'metadata', {}) or {}
@@ -1425,6 +1432,10 @@ class PreviewWidget(QWidget):
     
     def _detect_black_cutoff_pixels(self):
         """检测因屏幕反光补偿导致的black cut-off像素"""
+        # 释放旧的mask以避免累积（~6MB if active）
+        if self._cutoff_pixels is not None:
+            self._cutoff_pixels = None
+
         if not self.current_image or self.current_image.array is None:
             self._cutoff_pixels = None
             return
@@ -3546,6 +3557,29 @@ class PreviewWidget(QWidget):
             
         except Exception as e:
             print(f"Focused模式裁剪编辑错误: {e}")
+
+    def clear_preview(self):
+        """彻底清空当前预览及相关状态"""
+        # 停止 black cutoff 显示
+        self._show_black_cutoff = False
+        self._cutoff_compensation = 0.0
+        self._cutoff_pixels = None
+
+        # 释放当前图像
+        if self.current_image is not None:
+            if hasattr(self.current_image, "array") and self.current_image.array is not None:
+                self.current_image.array = None
+                print("Debug: preview清空，删除Array")
+            self.current_image = None
+            print("Debug: preview清空，current_image")
+
+        # 清空 UI
+        self.image_label.clear()
+        # 如果有其它 per-image 状态（裁剪 overlay 等），也可以在这里顺手清掉
+        self._crop_overlay_norm = None
+        self._focused_crop_id = None
+        self._all_crops = []
+        print("Debug: preview清空完毕")
 
     def cleanup(self):
         """清理资源，防止内存泄漏

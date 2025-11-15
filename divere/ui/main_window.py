@@ -176,6 +176,10 @@ class MainWindow(QMainWindow):
         self.context.status_message_changed.connect(self.statusBar().showMessage)
         self.context.image_loaded.connect(self._on_image_loaded)
         self.context.autosave_requested.connect(self._on_autosave_requested)
+
+        # 新增：当 context 请求清空预览时，直接调用 PreviewWidget.clear_preview
+        self.context.preview_clear_requested.connect(self.preview_widget.clear_preview)
+
         # 连接curves配置重载信号
         self.context.curves_config_reloaded.connect(self._on_curves_config_reloaded)
         # 连接旋转完成信号

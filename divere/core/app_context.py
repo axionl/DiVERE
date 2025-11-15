@@ -1,4 +1,5 @@
 from PySide6.QtCore import QObject, Signal, QRunnable, Slot, QThreadPool, QTimer
+from PySide6.QtGui import QPixmapCache
 from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
@@ -22,7 +23,7 @@ class _PreviewWorkerSignals(QObject):
 
 
 class _PreviewWorker(QRunnable):
-    def __init__(self, image: ImageData, params: ColorGradingParams, the_enlarger: TheEnlarger, 
+    def __init__(self, image: ImageData, params: ColorGradingParams, the_enlarger: TheEnlarger,
                  color_space_manager: ColorSpaceManager, convert_to_monochrome_in_idt: bool = False):
         super().__init__()
         self.image = image
@@ -34,29 +35,34 @@ class _PreviewWorker(QRunnable):
 
     @Slot()
     def run(self):
+        # —— 关键点：把大对象搬到局部变量，再把 self 上的引用清掉 ——
+        image = self.image
+        params = self.params
+        self.image = None
+        self.params = None
         try:
-            # 传递monochrome转换参数
             monochrome_converter = None
             if self.convert_to_monochrome_in_idt:
                 monochrome_converter = self.color_space_manager.convert_to_monochrome
 
             result_image = self.the_enlarger.apply_full_pipeline(
-                self.image, self.params,
+                image,
+                params,
                 convert_to_monochrome_in_idt=self.convert_to_monochrome_in_idt,
-                monochrome_converter=monochrome_converter
+                monochrome_converter=monochrome_converter,
             )
-            result_image = self.color_space_manager.convert_to_display_space(result_image, "DisplayP3")
+            result_image = self.color_space_manager.convert_to_display_space(
+                result_image, "DisplayP3"
+            )
             self.signals.result.emit(result_image)
+
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             self.signals.error.emit(f"{e}\n{tb}")
+
         finally:
-            # 显式释放worker持有的对象以防止内存泄漏
-            if hasattr(self, 'image') and self.image is not None:
-                del self.image
-            if hasattr(self, 'params') and self.params is not None:
-                del self.params
+            # 不再依赖 del，只发 finished，实际引用已经在上面提前断掉了
             self.signals.finished.emit()
 
 
@@ -73,6 +79,8 @@ class ApplicationContext(QObject):
     params_changed = Signal(ColorGradingParams)
     status_message_changed = Signal(str)
     autosave_requested = Signal()
+    # 请求清空预览
+    preview_clear_requested = Signal()  # <<< 新增：请求清空预览
     # 裁剪变化（None 或 (x,y,w,h) 归一化）
     crop_changed = Signal(object)
     # 胶片类型变化信号
@@ -731,8 +739,42 @@ class ApplicationContext(QObject):
         try:
             self._loading_image = True  # 设置加载标志，延迟预览更新
             self.status_message_changed.emit(f"正在加载图像: {file_path}...")
+
+            # 1. 根据内存报告决定是轻量清理还是重度清理
+            try:
+                report = self.get_memory_usage_report()
+                total_mb = report.get("total_estimated_mb", 0)
+            except Exception:
+                total_mb = 0
+            print(f"[MEM] total_estimated_mb={total_mb:.1f}MB，执行 _clear_all_caches()")
+            self._clear_all_caches()
+            if total_mb > 4000:  # 阈值你自己定，比如 4GB
+                print(f"[MEM] total_estimated_mb={total_mb:.1f}MB，执行 _clear_all_caches()")
+                self._clear_all_caches()
+            else:
+                # 只清当前图像数据
+                self._clear_current_image_data()
+
+            # 先让 UI 清空当前预览，释放 PreviewWidget 里那一份大图像
+            self.preview_clear_requested.emit()
+
             # 显式释放旧图像以防止内存泄漏
-            self._current_image = None
+            if self._current_image is not None:
+                if hasattr(self._current_image, 'array') and self._current_image.array is not None:
+                    self._current_image.array = None  # 释放 numpy 数组
+                self._current_image = None
+
+            # 显式释放旧代理图像（关键修复：之前缺失此步骤）
+            if self._current_proxy is not None:
+                if hasattr(self._current_proxy, 'array') and self._current_proxy.array is not None:
+                    self._current_proxy.array = None  # 释放代理的 numpy 数组（~17MB）
+                self._current_proxy = None
+
+            # 清理色卡缓存（新图片新缓存，避免旧图片数据残留）
+            self._cached_reference_colors = None
+            self._reference_colorspace = None
+            self._reference_filename = None
+
             self._current_image = self.image_manager.load_image(file_path)
             
             # 更新文件夹导航状态
@@ -2169,6 +2211,175 @@ class ApplicationContext(QObject):
 
         except Exception as e:
             print(f"恢复状态失败: {e}")
+
+    # =================
+    # 内存管理辅助方法
+    # =================
+    def _clear_current_image_data(self):
+        """智能清理：清除当前图像数据（保留缓存以提高性能）
+
+        清理内容：
+        - _current_image: 当前原始图像（~50-200MB）
+        - _current_proxy: 当前代理图像（~17MB）
+
+        不清理内容（保留以提高性能）：
+        - ImageManager._proxy_cache: 代理缓存（LRU 自动管理）
+        - LUTProcessor._lut_cache: LUT 缓存（LRU 自动管理）
+        - ColorSpaceManager._convert_cache: 转换缓存（LRU 自动管理）
+        """
+        # 清理当前原始图像
+        if self._current_image is not None:
+            if hasattr(self._current_image, 'array') and self._current_image.array is not None:
+                self._current_image.array = None  # 释放 numpy 数组
+            self._current_image = None
+
+        # 清理当前代理图像
+        if self._current_proxy is not None:
+            if hasattr(self._current_proxy, 'array') and self._current_proxy.array is not None:
+                self._current_proxy.array = None  # 释放代理的 numpy 数组
+            self._current_proxy = None
+
+    def _clear_all_caches(self):
+        """激进清理：清空所有缓存和当前图像数据
+
+        用于"完全从文件重新加载"的场景，会清空所有缓存。
+        警告：这会导致性能下降，因为后续操作需要重新加载和计算。
+
+        清理内容：
+        - 当前图像数据（_current_image, _current_proxy）
+        - ImageManager 代理缓存（~170MB）
+        - LUTProcessor LUT 缓存（~20MB）
+        - ColorSpaceManager 转换缓存（~0.02MB）
+        - 触发垃圾回收
+        """
+        # 1. 清理当前图像数据
+        self._clear_current_image_data()
+
+        # 2. 清理 ImageManager 缓存
+        if hasattr(self, 'image_manager') and self.image_manager:
+            self.image_manager.clear_cache()
+
+        # 3. 清理 LUTProcessor 缓存
+        if (hasattr(self, 'the_enlarger') and self.the_enlarger and
+            hasattr(self.the_enlarger, 'lut_processor') and self.the_enlarger.lut_processor):
+            self.the_enlarger.lut_processor.clear_cache()
+
+        # 4. 清理 ColorSpaceManager 转换缓存
+        if hasattr(self, 'color_space_manager') and self.color_space_manager:
+            self.color_space_manager.clear_convert_cache()
+
+        # 5. 新增：清 Qt 的全局 pixmap 缓存
+        try:
+            QPixmapCache.clear()
+        except Exception as e:
+            print("[MEM] QPixmapCache.clear() failed:", e)
+
+        # 6. 手动触发垃圾回收（确保内存立即释放）
+        import gc
+        gc.collect()
+
+    def get_memory_usage_report(self) -> dict:
+        """获取详细的内存使用报告
+
+        返回各个组件的内存使用情况，用于诊断和监控。
+
+        Returns:
+            包含以下键的字典：
+            - current_image: 当前原始图像大小（字节）
+            - current_proxy: 当前代理图像大小（字节）
+            - proxy_cache: 代理缓存信息
+            - lut_cache: LUT 缓存信息
+            - colorspace_cache: 色彩空间转换缓存信息
+            - total_estimated_mb: 总估计内存使用（MB）
+        """
+        import sys
+
+        report = {}
+
+        # 1. 当前原始图像
+        current_image_size = 0
+        if self._current_image is not None:
+            current_image_size = sys.getsizeof(self._current_image)
+            if hasattr(self._current_image, 'array') and self._current_image.array is not None:
+                # numpy 数组的实际大小
+                current_image_size += self._current_image.array.nbytes
+        report['current_image_bytes'] = current_image_size
+        report['current_image_mb'] = round(current_image_size / (1024 * 1024), 2)
+
+        # 2. 当前代理图像
+        current_proxy_size = 0
+        if self._current_proxy is not None:
+            current_proxy_size = sys.getsizeof(self._current_proxy)
+            if hasattr(self._current_proxy, 'array') and self._current_proxy.array is not None:
+                current_proxy_size += self._current_proxy.array.nbytes
+        report['current_proxy_bytes'] = current_proxy_size
+        report['current_proxy_mb'] = round(current_proxy_size / (1024 * 1024), 2)
+
+        # 3. ImageManager 代理缓存
+        proxy_cache_count = 0
+        proxy_cache_max = 0
+        if hasattr(self, 'image_manager') and self.image_manager:
+            proxy_cache_count = len(self.image_manager._proxy_cache)
+            proxy_cache_max = self.image_manager._max_cache_size
+        report['proxy_cache'] = {
+            'count': proxy_cache_count,
+            'max': proxy_cache_max,
+            'estimated_mb': round(proxy_cache_count * 17, 2)  # 假设每个代理约 17MB
+        }
+
+        # 4. LUTProcessor LUT 缓存
+        lut_cache_count = 0
+        lut_cache_max = 0
+        if (hasattr(self, 'the_enlarger') and self.the_enlarger and
+            hasattr(self.the_enlarger, 'lut_processor') and self.the_enlarger.lut_processor):
+            lut_cache_count = len(self.the_enlarger.lut_processor._lut_cache)
+            lut_cache_max = self.the_enlarger.lut_processor._max_cache_size
+        report['lut_cache'] = {
+            'count': lut_cache_count,
+            'max': lut_cache_max,
+            'estimated_mb': round(lut_cache_count * 1, 2)  # 假设每个 LUT 约 1MB
+        }
+
+        # 5. ColorSpaceManager 转换缓存
+        colorspace_cache_count = 0
+        colorspace_cache_max = 0
+        if hasattr(self, 'color_space_manager') and self.color_space_manager:
+            colorspace_cache_count = len(self.color_space_manager._convert_cache)
+            colorspace_cache_max = self.color_space_manager._convert_cache_max_size
+        report['colorspace_cache'] = {
+            'count': colorspace_cache_count,
+            'max': colorspace_cache_max,
+            'estimated_mb': round(colorspace_cache_count * 0.0001, 4)  # 非常小
+        }
+
+        # 6. 总估计内存
+        total_mb = (
+            report['current_image_mb'] +
+            report['current_proxy_mb'] +
+            report['proxy_cache']['estimated_mb'] +
+            report['lut_cache']['estimated_mb'] +
+            report['colorspace_cache']['estimated_mb']
+        )
+        report['total_estimated_mb'] = round(total_mb, 2)
+
+        return report
+
+    def print_memory_usage_report(self):
+        """打印内存使用报告到控制台（便于调试）"""
+        report = self.get_memory_usage_report()
+
+        print("\n" + "="*60)
+        print("内存使用报告 (Memory Usage Report)")
+        print("="*60)
+        print(f"当前原始图像:       {report['current_image_mb']:>8.2f} MB")
+        print(f"当前代理图像:       {report['current_proxy_mb']:>8.2f} MB")
+        print("-"*60)
+        print(f"代理缓存:           {report['proxy_cache']['count']:>3d} / {report['proxy_cache']['max']:>3d} 个  (~{report['proxy_cache']['estimated_mb']:>6.2f} MB)")
+        print(f"LUT 缓存:           {report['lut_cache']['count']:>3d} / {report['lut_cache']['max']:>3d} 个  (~{report['lut_cache']['estimated_mb']:>6.2f} MB)")
+        print(f"色彩空间缓存:       {report['colorspace_cache']['count']:>3d} / {report['colorspace_cache']['max']:>3d} 个  (~{report['colorspace_cache']['estimated_mb']:>6.4f} MB)")
+        print("-"*60)
+        print(f"总估计内存使用:     {report['total_estimated_mb']:>8.2f} MB")
+        print("="*60 + "\n")
 
     def cleanup(self):
         """清理 ApplicationContext 的资源，防止内存泄漏

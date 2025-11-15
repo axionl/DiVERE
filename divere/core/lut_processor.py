@@ -18,7 +18,7 @@ class LUTProcessor:
     def __init__(self, the_enlarger: TheEnlarger):
         self.the_enlarger = the_enlarger
         self._lut_cache: "OrderedDict[str, LUT3D]" = OrderedDict()  # 使用 OrderedDict 实现正确的 LRU
-        self._max_cache_size = 20
+        self._max_cache_size = 1
     
     def generate_preview_lut(self, params: ColorGradingParams, size: int = 32) -> LUT3D:
         """生成预览LUT"""

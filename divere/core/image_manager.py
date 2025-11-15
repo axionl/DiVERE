@@ -33,7 +33,7 @@ class ImageManager:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self._proxy_cache: "OrderedDict[str, ImageData]" = OrderedDict()  # 使用 OrderedDict 实现正确的 LRU
-        self._max_cache_size = 10  # 最大缓存图像数量
+        self._max_cache_size = 1  # 最大缓存图像数量
         
     def load_image(self, file_path: str) -> ImageData:
         """加载图像文件"""
