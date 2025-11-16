@@ -128,11 +128,24 @@ class ApplicationContext(QObject):
         self._preview_busy: bool = False
         self._preview_pending: bool = False
         self._loading_image: bool = False  # 图像加载状态标志
-        self.thread_pool: QThreadPool = QThreadPool.globalInstance()
-        self.thread_pool.setMaxThreadCount(1)
-        # 设置线程栈大小为8MB以避免macOS ARM版本打包后的栈溢出问题
-        # 这主要解决OpenBLAS在numpy.linalg.solve中的栈空间不足问题
-        self.thread_pool.setStackSize(8 * 1024 * 1024)  # 8MB
+
+        # 进程隔离配置（用于解决 macOS heap 内存不归还问题）
+        # 参考：PROCESS_ISOLATION_ANALYSIS.md
+        self._use_process_isolation: bool = self._should_use_process_isolation()
+
+        if self._use_process_isolation:
+            # 进程模式相关字段
+            self._preview_worker_process = None  # PreviewWorkerProcess 实例
+            self._proxy_shared_memory = None  # shared_memory.SharedMemory 实例
+            self._result_poll_timer = QTimer()
+            self._result_poll_timer.timeout.connect(self._poll_preview_result)
+        else:
+            # 线程模式相关字段
+            self.thread_pool: QThreadPool = QThreadPool.globalInstance()
+            self.thread_pool.setMaxThreadCount(1)
+            # 设置线程栈大小为8MB以避免macOS ARM版本打包后的栈溢出问题
+            # 这主要解决OpenBLAS在numpy.linalg.solve中的栈空间不足问题
+            self.thread_pool.setStackSize(8 * 1024 * 1024)  # 8MB
 
         # AI自动校色迭代状态
         self._auto_color_iterations = 0
@@ -184,15 +197,45 @@ class ApplicationContext(QObject):
         # 连接文件夹导航信号
         self.folder_navigator.file_changed.connect(self.load_image)
 
+    def _should_use_process_isolation(self) -> bool:
+        """根据配置和平台决定是否使用进程隔离
+
+        进程隔离用于解决 macOS heap 内存不归还问题。
+        参考文档：PROCESS_ISOLATION_ANALYSIS.md
+
+        Returns:
+            bool: 是否使用进程隔离
+        """
+        import platform
+
+        # 从配置读取（支持环境变量覆盖）
+        import os
+        env_setting = os.environ.get('DIVERE_PROCESS_ISOLATION', None)
+        if env_setting:
+            config_value = env_setting.lower()
+        else:
+            config_value = enhanced_config_manager.get_ui_setting(
+                "use_process_isolation", "never"  # 默认禁用，等稳定后改为 "auto"
+            )
+
+        if config_value == "never":
+            return False
+        elif config_value == "always":
+            return True
+        else:  # "auto"
+            # macOS/Linux: 默认启用（内存问题严重）
+            # Windows: 默认禁用（multiprocessing 复杂，需要 if __name__ == '__main__' 保护）
+            return platform.system() in ['Darwin', 'Linux']
+
     def _create_default_params(self) -> ColorGradingParams:
         params = ColorGradingParams()
         params.density_gamma = 2.6
         params.density_matrix = self.the_enlarger.pipeline_processor.get_density_matrix_array("Cineon_States_M_to_Print_Density")
         params.density_matrix_name = "Cineon_States_M_to_Print_Density"
         params.enable_density_matrix = True
-        
+
         # 默认曲线改由 default preset 决定；此处不再强行加载硬编码曲线
-            
+
         return params
     
     def _load_smart_default_preset(self, file_path: str):
@@ -774,6 +817,11 @@ class ApplicationContext(QObject):
             self._cached_reference_colors = None
             self._reference_colorspace = None
             self._reference_filename = None
+
+            # ============ 进程隔离：销毁旧 worker 进程 ============
+            if self._use_process_isolation:
+                self._shutdown_preview_worker_process()
+            # ===================================================
 
             self._current_image = self.image_manager.load_image(file_path)
             
@@ -1832,43 +1880,19 @@ class ApplicationContext(QObject):
         return np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06], dtype=np.float64).reshape(3, 2)
 
     def _trigger_preview_update(self):
+        """触发预览更新（根据配置选择进程或线程模式）"""
         if not self._current_proxy:
             return
 
-        if self._preview_busy:
-            self._preview_pending = True
+        # 如果正在加载图片，延迟预览
+        if self._loading_image:
             return
 
-        self._preview_busy = True
-
-        # 优化内存复制：使用 view() 和 shallow_copy() 避免深拷贝
-        #
-        # 修复说明：
-        # - proxy_view: 使用 ImageData.view() 共享图像数组（节省 17 MB/次）
-        # - params_view: 使用 shallow_copy() 共享参数数组（节省 3-5 KB/次）
-        #
-        # 安全性保证：
-        # - Preview Worker 只读处理图像和参数，不修改原数据
-        # - 处理结果是新创建的数组，不影响输入
-        # - Worker 完成后，view 对象被释放
-        #
-        # 性能提升：
-        # - 内存：高频场景下节省 170 MB/秒
-        # - 时间：消除 ~50ms 的数组拷贝时间/次
-        proxy_view = self._current_proxy.view()
-        params_view = self._current_params.shallow_copy()
-
-        worker = _PreviewWorker(
-            image=proxy_view,
-            params=params_view,
-            the_enlarger=self.the_enlarger,
-            color_space_manager=self.color_space_manager,
-            convert_to_monochrome_in_idt=self.should_convert_to_monochrome()
-        )
-        worker.signals.result.connect(self._on_preview_result)
-        worker.signals.error.connect(self._on_preview_error)
-        worker.signals.finished.connect(self._on_preview_finished)
-        self.thread_pool.start(worker)
+        # 根据配置选择模式
+        if self._use_process_isolation:
+            self._trigger_preview_with_process()
+        else:
+            self._trigger_preview_with_thread()
 
     def _on_preview_result(self, result_image: ImageData):
         self.preview_updated.emit(result_image)
@@ -2381,6 +2405,179 @@ class ApplicationContext(QObject):
         print(f"总估计内存使用:     {report['total_estimated_mb']:>8.2f} MB")
         print("="*60 + "\n")
 
+    # =================
+    # 进程隔离相关方法（用于解决 macOS heap 内存不归还问题）
+    # 参考文档：PROCESS_ISOLATION_ANALYSIS.md
+    # =================
+
+    def _shutdown_preview_worker_process(self):
+        """销毁 worker 进程并清理 shared memory（幂等操作）"""
+        if not hasattr(self, '_preview_worker_process'):
+            return
+
+        # 销毁 worker 进程
+        if self._preview_worker_process is not None:
+            try:
+                self._preview_worker_process.shutdown()
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to shutdown worker process: {e}")
+            finally:
+                self._preview_worker_process = None
+
+        # 清理 shared memory
+        if self._proxy_shared_memory is not None:
+            try:
+                self._proxy_shared_memory.close()
+                self._proxy_shared_memory.unlink()
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to cleanup shared memory: {e}")
+            finally:
+                self._proxy_shared_memory = None
+
+        # 停止轮询定时器
+        if hasattr(self, '_result_poll_timer') and self._result_poll_timer is not None:
+            self._result_poll_timer.stop()
+
+    def _create_preview_worker_process(self):
+        """创建 worker 进程并传递 proxy（Lazy 创建）
+
+        失败时自动回退到线程模式
+        """
+        if not self._current_proxy:
+            return
+
+        try:
+            from multiprocessing import shared_memory
+            from divere.core.preview_worker_process import PreviewWorkerProcess
+
+            # 1. 生成 proxy（如果还没有）
+            proxy = self._current_proxy
+
+            # 2. 创建 shared memory 并写入 proxy
+            shm = shared_memory.SharedMemory(create=True, size=proxy.array.nbytes)
+            shm_array = np.ndarray(proxy.array.shape, dtype=proxy.array.dtype,
+                                   buffer=shm.buf)
+            np.copyto(shm_array, proxy.array)
+
+            # 3. 创建 worker 进程
+            self._preview_worker_process = PreviewWorkerProcess(
+                proxy_shm_name=shm.name,
+                proxy_shape=proxy.array.shape,
+                proxy_dtype=str(proxy.array.dtype),
+                init_config={},  # 可选配置
+            )
+            self._preview_worker_process.start()
+
+            # 4. 验证进程启动成功
+            import time
+            time.sleep(0.1)
+            if not self._preview_worker_process.is_alive():
+                raise RuntimeError("Worker process failed to start")
+
+            self._proxy_shared_memory = shm
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Process isolation failed, falling back to thread mode: {e}")
+
+            # 清理失败的资源
+            if hasattr(self, '_proxy_shared_memory') and self._proxy_shared_memory:
+                try:
+                    self._proxy_shared_memory.close()
+                    self._proxy_shared_memory.unlink()
+                except:
+                    pass
+                self._proxy_shared_memory = None
+
+            # 自动回退到线程模式
+            self._use_process_isolation = False
+            self._preview_worker_process = None
+
+            # 提示用户
+            self.status_message_changed.emit(
+                "进程隔离启动失败，已回退到线程模式（内存优化受限）"
+            )
+
+            # 使用线程模式重新触发预览
+            self._trigger_preview_with_thread()
+
+    def _trigger_preview_with_process(self):
+        """使用进程模式触发预览"""
+        if not self._current_proxy:
+            return
+
+        # Lazy 创建 worker 进程
+        if self._preview_worker_process is None:
+            self._create_preview_worker_process()
+
+        # 如果创建失败（已回退到线程模式），直接返回
+        if self._preview_worker_process is None:
+            return
+
+        # 发送预览请求（非阻塞）
+        self._preview_worker_process.request_preview(
+            self._current_params,
+            convert_to_monochrome=self.should_convert_to_monochrome()
+        )
+
+        # 启动结果轮询定时器
+        if not self._result_poll_timer.isActive():
+            self._result_poll_timer.start(16)  # ~60 FPS
+
+    def _trigger_preview_with_thread(self):
+        """使用线程模式触发预览（原有实现）"""
+        if not self._current_proxy:
+            return
+
+        if self._preview_busy:
+            self._preview_pending = True
+            return
+
+        self._preview_busy = True
+
+        # 使用 view() 和 shallow_copy() 避免深拷贝
+        proxy_view = self._current_proxy.view()
+        params_view = self._current_params.shallow_copy()
+
+        worker = _PreviewWorker(
+            image=proxy_view,
+            params=params_view,
+            the_enlarger=self.the_enlarger,
+            color_space_manager=self.color_space_manager,
+            convert_to_monochrome_in_idt=self.should_convert_to_monochrome()
+        )
+        worker.signals.result.connect(self._on_preview_result)
+        worker.signals.error.connect(self._on_preview_error)
+        worker.signals.finished.connect(self._on_preview_finished)
+
+        # 确保线程池已初始化
+        if not hasattr(self, 'thread_pool') or self.thread_pool is None:
+            from PySide6.QtCore import QThreadPool
+            self.thread_pool = QThreadPool.globalInstance()
+            self.thread_pool.setMaxThreadCount(1)
+            self.thread_pool.setStackSize(8 * 1024 * 1024)
+
+        self.thread_pool.start(worker)
+
+    def _poll_preview_result(self):
+        """定期轮询结果队列（~60 FPS）"""
+        if self._preview_worker_process is None:
+            self._result_poll_timer.stop()
+            return
+
+        result = self._preview_worker_process.try_get_result()
+
+        if result is not None:
+            if isinstance(result, Exception):
+                # 错误处理
+                self._on_preview_error(str(result))
+            else:
+                # 正常结果
+                self._on_preview_result(result)
+
     def cleanup(self):
         """清理 ApplicationContext 的资源，防止内存泄漏
 
@@ -2388,6 +2585,14 @@ class ApplicationContext(QObject):
         这个方法应该在 ApplicationContext 不再使用时调用（如窗口关闭时）
         """
         print("[DEBUG] ApplicationContext.cleanup: 开始清理资源")
+
+        # 0. 清理 worker 进程（如果使用进程隔离）
+        if self._use_process_isolation:
+            try:
+                self._shutdown_preview_worker_process()
+                print("[DEBUG] preview_worker_process 清理完成")
+            except Exception as e:
+                print(f"[WARNING] preview_worker_process 清理失败: {e}")
 
         # 1. 停止自动保存定时器
         try:

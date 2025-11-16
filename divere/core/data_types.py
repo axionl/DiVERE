@@ -798,6 +798,16 @@ class ColorGradingParams:
             data['density_matrix'] = self.density_matrix.tolist()
         return data
 
+    def to_full_dict(self) -> Dict[str, Any]:
+        """将所有参数（包括 transient 状态）序列化为字典，用于进程间传递。"""
+        data = self.to_dict()
+        # 添加 transient 状态（pipeline 控制标志）
+        data['enable_density_inversion'] = self.enable_density_inversion
+        data['enable_density_matrix'] = self.enable_density_matrix
+        data['enable_rgb_gains'] = self.enable_rgb_gains
+        data['enable_density_curve'] = self.enable_density_curve
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ColorGradingParams':
         """
