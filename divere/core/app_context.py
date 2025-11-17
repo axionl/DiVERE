@@ -388,6 +388,9 @@ class ApplicationContext(QObject):
             return
         self._crop_focused = True
         self._prepare_proxy()
+        # 模式切换后需要重建worker（proxy已变化）
+        if self._use_process_isolation and self._preview_worker_process is not None:
+            self._shutdown_preview_worker_process()
         self._trigger_preview_update()
         self._autosave_timer.start()
 
@@ -396,6 +399,9 @@ class ApplicationContext(QObject):
             return
         self._crop_focused = False
         self._prepare_proxy()
+        # 模式切换后需要重建worker（proxy已变化）
+        if self._use_process_isolation and self._preview_worker_process is not None:
+            self._shutdown_preview_worker_process()
         self._trigger_preview_update()
         self._autosave_timer.start()
 
@@ -410,6 +416,9 @@ class ApplicationContext(QObject):
                 return
             self._crop_focused = True
             self._prepare_proxy()
+            # 模式切换后需要重建worker（proxy已变化）
+            if self._use_process_isolation and self._preview_worker_process is not None:
+                self._shutdown_preview_worker_process()
             self._trigger_preview_update()
             self._autosave_timer.start()
         except Exception:
@@ -479,7 +488,12 @@ class ApplicationContext(QObject):
             self._crop_focused = True
             # 一次性刷新
             self.params_changed.emit(self._current_params)
-            self._prepare_proxy(); self._trigger_preview_update()
+            self._prepare_proxy()
+            # 模式切换后需要重建worker（proxy已变化）
+            if self._use_process_isolation and self._preview_worker_process is not None:
+                self._shutdown_preview_worker_process()
+            self._trigger_preview_update()
+            self._autosave_timer.start()
         except Exception:
             pass
 
@@ -575,6 +589,9 @@ class ApplicationContext(QObject):
                 # 如果当前处于聚焦状态，需要重新准备proxy
                 if self._crop_focused:
                     self._prepare_proxy()
+                    # Crop rect调整后需要重建worker（proxy已变化）
+                    if self._use_process_isolation and self._preview_worker_process is not None:
+                        self._shutdown_preview_worker_process()
                     self._trigger_preview_update()
                 self._autosave_timer.start()
         except Exception as e:
@@ -1717,130 +1734,84 @@ class ApplicationContext(QObject):
         self._perform_neutral_point_iteration()
 
     def _prepare_proxy(self):
-        """准备proxy图像，应用标准变换链：裁剪 → 旋转"""
+        """准备proxy图像：根据模式生成适当质量的proxy
+
+        两种模式：
+        1. Contactsheet模式：生成完整的downsampled原图
+        2. Crop focused模式：先crop再downsample（保证质量）
+
+        这样做的好处：
+        - Crop模式下长边始终保持proxy_max_size（1500px），质量好
+        - 其他变换（IDT gamma、color transform、rotate）在worker中处理
+        - 只有模式切换和crop rect调整需要重建worker
+
+        重建时机：
+        - 图片切换：需要重建
+        - 模式切换（contactsheet ↔ crop focused）：需要重建
+        - Crop rect调整：需要重建
+        - IDT/Rotate/Color修改：不需要重建（在worker中处理）
+        """
         if not self._current_image:
             return
-        
-        # 源图（用于变换）
+
+        # 源图
         src_image = self._current_image
         orig_h, orig_w = src_image.height, src_image.width
 
-        # === 标准变换链：Step 1 - 裁剪（若聚焦） ===
+        # === 模式判断：是否需要预先crop ===
         if self._crop_focused:
+            print("DEBUG: _prepare_proxy: 准备crop后的proxy")
+            # Crop focused模式：先crop再downsample（保证质量）
             crop_instance = self.get_active_crop_instance()
             if crop_instance and crop_instance.rect_norm and src_image.array is not None:
+                print("DEBUG: _prepare_proxy: 多裁剪聚焦模式")
                 try:
                     x, y, w, h = crop_instance.rect_norm
-                    x0 = int(round(x * orig_w)); y0 = int(round(y * orig_h))
-                    x1 = int(round((x + w) * orig_w)); y1 = int(round((y + h) * orig_h))
-                    x0 = max(0, min(orig_w - 1, x0)); x1 = max(x0 + 1, min(orig_w, x1))
-                    y0 = max(0, min(orig_h - 1, y0)); y1 = max(y0 + 1, min(orig_h, y1))
+                    x0 = int(round(x * orig_w))
+                    y0 = int(round(y * orig_h))
+                    x1 = int(round((x + w) * orig_w))
+                    y1 = int(round((y + h) * orig_h))
+                    x0 = max(0, min(orig_w - 1, x0))
+                    x1 = max(x0 + 1, min(orig_w, x1))
+                    y0 = max(0, min(orig_h - 1, y0))
+                    y1 = max(y0 + 1, min(orig_h, y1))
                     cropped_arr = src_image.array[y0:y1, x0:x1, :].copy()
                     src_image = src_image.copy_with_new_array(cropped_arr)
                 except Exception:
                     pass
             # 接触印相聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
-            elif (self._active_crop_id is None and self._contactsheet_profile.crop_rect is not None and src_image.array is not None):
+            elif (self._active_crop_id is None and
+                  self._contactsheet_profile.crop_rect is not None and
+                  src_image.array is not None):
+                print("DEBUG: _prepare_proxy: 单张裁剪聚焦模式")
                 try:
                     x, y, w, h = self._contactsheet_profile.crop_rect
-                    x0 = int(round(x * orig_w)); y0 = int(round(y * orig_h))
-                    x1 = int(round((x + w) * orig_w)); y1 = int(round((y + h) * orig_h))
-                    x0 = max(0, min(orig_w - 1, x0)); x1 = max(x0 + 1, min(orig_w, x1))
-                    y0 = max(0, min(orig_h - 1, y0)); y1 = max(y0 + 1, min(orig_h, y1))
+                    x0 = int(round(x * orig_w))
+                    y0 = int(round(y * orig_h))
+                    x1 = int(round((x + w) * orig_w))
+                    y1 = int(round((y + h) * orig_h))
+                    x0 = max(0, min(orig_w - 1, x0))
+                    x1 = max(x0 + 1, min(orig_w, x1))
+                    y0 = max(0, min(orig_h - 1, y0))
+                    y1 = max(y0 + 1, min(orig_h, y1))
                     cropped_arr = src_image.array[y0:y1, x0:x1, :].copy()
                     src_image = src_image.copy_with_new_array(cropped_arr)
                 except Exception:
                     pass
 
-        # === 标准变换链：Step 2 - 生成代理 ===
+        # 生成downsampled proxy（基于crop后的图像，或完整图像）
         proxy = self.image_manager.generate_proxy(
             src_image,
             self.the_enlarger.preview_config.get_proxy_size_tuple()
         )
 
-        # === 标准变换链：Step 3 - 前置IDT Gamma（幂次变换） ===
-        idt_gamma = self.get_current_idt_gamma()
-        if abs(idt_gamma - 1.0) > 1e-6 and proxy.array is not None:
-            try:
-                proxy_array = self.the_enlarger.pipeline_processor.math_ops.apply_power(
-                    proxy.array, idt_gamma, use_optimization=True
-                )
-                proxy = proxy.copy_with_new_array(proxy_array)
-            except Exception:
-                pass
+        # 保存原图尺寸到metadata（供UI层使用）
+        proxy.metadata['source_wh'] = (int(orig_w), int(orig_h))
 
-        # === 标准变换链：Step 4 - 色彩空间转换（跳过逆伽马） ===
-        proxy = self.color_space_manager.set_image_color_space(
-            proxy, self._current_params.input_color_space_name
-        )
-        # 显式释放旧的proxy对象以防止内存泄漏
+        # 释放旧proxy并保存新proxy
         if self._current_proxy is not None:
             del self._current_proxy
-        self._current_proxy = self.color_space_manager.convert_to_working_space(
-            proxy, skip_gamma_inverse=True
-        )
-
-        # Monochrome转换现在在pipeline processor的IDT阶段进行
-
-        # === 标准变换链：Step 5 - 旋转 ===
-        # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用contactsheet orientation
-        effective_orientation = self.get_current_orientation()  # 获取当前profile的orientation
-        
-        if self._crop_focused:
-            # 聚焦状态：使用crop的独立orientation
-            crop_instance = self.get_active_crop_instance()
-            if crop_instance:
-                effective_orientation = crop_instance.orientation
-        
-        # 应用旋转到代理图像
-        if (self._current_proxy and self._current_proxy.array is not None and
-            effective_orientation % 360 != 0):
-            try:
-                import numpy as np
-                k = (effective_orientation // 90) % 4
-                if k != 0:
-                    rotated = np.rot90(self._current_proxy.array, k=int(k))
-                    # 保存旧对象引用以便释放
-                    old_proxy = self._current_proxy
-                    self._current_proxy = old_proxy.copy_with_new_array(rotated)
-                    # 显式释放旧对象以防止内存泄漏
-                    del old_proxy
-            except Exception:
-                pass
-        
-        # === 标准变换链：Step 6 - 注入裁剪可视化元数据（供PreviewWidget绘制） ===
-        try:
-            md = self._current_proxy.metadata
-            md['source_wh'] = (int(orig_w), int(orig_h))
-            md['orientation'] = int(effective_orientation) % 360  # Add orientation to metadata
-            
-            # 传递CropInstance信息到UI层
-            crop_instance = self.get_active_crop_instance()
-            if crop_instance:
-                md['crop_overlay'] = crop_instance.rect_norm
-                md['crop_instance'] = crop_instance  # 传递完整的crop实例
-            else:
-                # 无正式裁剪时，传递 contactsheet 裁剪（若有）
-                md['crop_overlay'] = self._contactsheet_profile.crop_rect
-                # 若此时处于"接触印相聚焦"，为坐标换算提供一个临时的 CropInstance
-                if self._crop_focused and self._contactsheet_profile.crop_rect is not None:
-                    try:
-                        md['crop_instance'] = CropInstance(
-                            id='contactsheet_focus',
-                            name='接触印相聚焦',
-                            rect_norm=self._contactsheet_profile.crop_rect,
-                            orientation=int(self._contactsheet_profile.orientation) % 360
-                        )
-                    except Exception:
-                        md['crop_instance'] = None
-                else:
-                    md['crop_instance'] = None
-                
-            md['crop_focused'] = bool(self._crop_focused)
-            md['active_crop_id'] = self._active_crop_id
-            md['global_orientation'] = int(self._contactsheet_profile.orientation)  # contactsheet orientation
-        except Exception:
-            pass
+        self._current_proxy = proxy
 
     def get_current_idt_gamma(self) -> float:
         """读取当前输入色彩空间的IDT Gamma（无则返回1.0）。"""
@@ -2517,10 +2488,35 @@ class ApplicationContext(QObject):
         if self._preview_worker_process is None:
             return
 
-        # 发送预览请求（非阻塞）
+        # Worker不需要crop（主进程在_prepare_proxy()中已处理）
+        # - Crop focused模式：proxy已经是crop后的高质量图
+        # - Contactsheet模式：proxy是完整的原图
+        crop_rect_norm = None
+
+        # 构建显示状态元数据（供UI正确渲染overlay和旋转）
+        display_metadata = {}
+
+        # Crop focused状态
+        display_metadata['crop_focused'] = self._crop_focused
+
+        # Crop overlay信息（仅在非focused模式下传递）
+        if not self._crop_focused:
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance and crop_instance.rect_norm:
+                display_metadata['crop_overlay'] = crop_instance.rect_norm
+
+        # 原图尺寸（用于UI计算overlay位置）
+        if self._current_image:
+            display_metadata['source_wh'] = (self._current_image.width, self._current_image.height)
+
+        # 发送预览请求（非阻塞），传递完整的proxy准备参数和显示状态
         self._preview_worker_process.request_preview(
             self._current_params,
-            convert_to_monochrome=self.should_convert_to_monochrome()
+            crop_rect_norm=crop_rect_norm,  # 始终为None
+            orientation=self.get_current_orientation(),
+            idt_gamma=self.get_current_idt_gamma(),
+            convert_to_monochrome=self.should_convert_to_monochrome(),
+            display_metadata=display_metadata
         )
 
         # 启动结果轮询定时器

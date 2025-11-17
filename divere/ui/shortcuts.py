@@ -112,12 +112,14 @@ class ShortcutsBinder(QObject):
     # 导航
     def _act_go_prev(self):
         self.host._show_status_message("⏳正在切换到上一张照片...")
+        self.host._fit_after_next_preview = True
         self.host.preview_widget.context.folder_navigator.navigate_previous()
         self.host.preview_widget._emit_switch_profile('contactsheet', None)
         self.host._show_status_message("已切换到上一张照片")
 
     def _act_go_next(self):
         self.host._show_status_message("⏳正在切换到下一张照片...")
+        self.host._fit_after_next_preview = True
         self.host.preview_widget.context.folder_navigator.navigate_next()
         self.host.preview_widget._emit_switch_profile('contactsheet', None)
         self.host._show_status_message("已切换到下一张照片")
@@ -327,7 +329,7 @@ class ShortcutsBinder(QObject):
             # 获取当前状态
             current_kind = getattr(self.host.context, '_current_profile_kind', 'contactsheet')
             current_crop_id = self.host.context.get_active_crop_id()
-            
+            self.host._fit_after_next_preview = True
             if not all_crops:
                 # 没有crops，保持在contactsheet
                 self.host.context.switch_to_contactsheet()
@@ -375,7 +377,7 @@ class ShortcutsBinder(QObject):
             # 获取当前状态
             current_kind = getattr(self.host.context, '_current_profile_kind', 'contactsheet')
             current_crop_id = self.host.context.get_active_crop_id()
-            
+            self.host._fit_after_next_preview = True
             if not all_crops:
                 # 没有crops，保持在contactsheet
                 self.host.context.switch_to_contactsheet()

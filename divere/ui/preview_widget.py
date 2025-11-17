@@ -2056,8 +2056,8 @@ class PreviewWidget(QWidget):
                     self._update_crop_cursor(zone)
                     event.accept(); return
             
-            # 按住 Cmd/Ctrl 且未命中任何裁剪框时：在原图模式直接进入"新建裁剪"框选
-            if self._show_all_crops and self._edit_modifier_down:
+            # 按住 Cmd/Ctrl 且未命中任何裁剪框时：直接进入"新建裁剪"框选（支持所有模式，包括聚焦模式）
+            if self._edit_modifier_down:
                 try:
                     # 再次确认当前位置未命中任何现有裁剪（避免与移动/编辑冲突）
                     if not self._get_crop_at_position(event.pos()):
@@ -2116,6 +2116,13 @@ class PreviewWidget(QWidget):
                         if (dx*dx + dy*dy) ** 0.5 <= self.cc_handle_radius_disp:
                             self.cc_drag_idx = idx
                             event.accept(); return
+
+            # 如果按下了编辑修饰键（Cmd/Ctrl），不应该进入平移模式
+            # 编辑键用于框选/编辑裁剪，与平移互斥
+            if self._edit_modifier_down:
+                event.accept()
+                return
+
             self.dragging = True
             self.last_mouse_pos = event.pos()
             self.drag_start_pos = event.pos()

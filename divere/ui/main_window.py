@@ -606,6 +606,8 @@ class MainWindow(QMainWindow):
             self.preview_widget.refresh_crop_selector(crops, active_id, is_focused)
             # 同步参数面板
             self.parameter_panel.initialize_defaults(self.context.get_current_params())
+            # 设置更新后fit
+            self._fit_after_next_preview = True
             # 更新工具可见性/可用性
             self._update_apply_contactsheet_enabled()
         except Exception as e:

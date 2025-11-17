@@ -87,16 +87,60 @@ def _worker_main_loop(
                 continue
 
             params = ColorGradingParams.from_dict(request['params'])
+            crop_rect_norm = request.get('crop_rect_norm')
+            orientation = request.get('orientation', 0)
+            idt_gamma = request.get('idt_gamma', 1.0)
             convert_to_monochrome = request.get('convert_to_monochrome', False)
+            display_metadata = request.get('display_metadata', {})
 
-            # 3.4 处理预览
+            # 3.4 动态准备proxy（每次根据请求参数执行完整变换链）
             try:
+                # === Step A: Crop ===
+                working_image = ImageData(
+                    array=proxy_image.array.copy(),
+                    metadata=proxy_image.metadata.copy()
+                )
+
+                if crop_rect_norm:
+                    x, y, w, h = crop_rect_norm
+                    h_orig, w_orig = working_image.array.shape[:2]
+                    x0 = int(round(x * w_orig))
+                    y0 = int(round(y * h_orig))
+                    x1 = int(round((x + w) * w_orig))
+                    y1 = int(round((y + h) * h_orig))
+                    x0 = max(0, min(w_orig - 1, x0))
+                    x1 = max(x0 + 1, min(w_orig, x1))
+                    y0 = max(0, min(h_orig - 1, y0))
+                    y1 = max(y0 + 1, min(h_orig, y1))
+                    working_image.array = working_image.array[y0:y1, x0:x1, :].copy()
+
+                # === Step B: IDT Gamma ===
+                if abs(idt_gamma - 1.0) > 1e-6:
+                    working_image.array = the_enlarger.pipeline_processor.math_ops.apply_power(
+                        working_image.array, idt_gamma, use_optimization=True
+                    )
+
+                # === Step C: Color Transform ===
+                working_image = color_space_manager.set_image_color_space(
+                    working_image, params.input_color_space_name
+                )
+                working_image = color_space_manager.convert_to_working_space(
+                    working_image, skip_gamma_inverse=True
+                )
+
+                # === Step D: Rotate ===
+                if orientation % 360 != 0:
+                    k = (orientation // 90) % 4
+                    if k != 0:
+                        working_image.array = np.rot90(working_image.array, k=int(k))
+
+                # === Step E: Pipeline处理 ===
                 monochrome_converter = None
                 if convert_to_monochrome:
                     monochrome_converter = color_space_manager.convert_to_monochrome
 
                 result_image = the_enlarger.apply_full_pipeline(
-                    proxy_image,
+                    working_image,
                     params,
                     convert_to_monochrome_in_idt=convert_to_monochrome,
                     monochrome_converter=monochrome_converter,
@@ -104,6 +148,13 @@ def _worker_main_loop(
                 result_image = color_space_manager.convert_to_display_space(
                     result_image, "DisplayP3"
                 )
+
+                # 添加orientation到metadata供UI使用（用于正确显示crop overlay）
+                result_image.metadata['orientation'] = orientation
+                result_image.metadata['global_orientation'] = orientation
+
+                # 合并主进程传递的display_metadata（包含crop_focused, crop_overlay等显示状态）
+                result_image.metadata.update(display_metadata)
 
                 # 3.5 通过 shared memory 返回结果
                 result_shm = shared_memory.SharedMemory(
@@ -193,7 +244,7 @@ class PreviewWorkerProcess:
         self._restart_count = 0
         self._max_restart_attempts = 3  # 最多自动重启 3 次
         self._last_request_time = 0.0
-        self._request_timeout = 5.0  # 5 秒超时
+        self._request_timeout = 300.0  # 300 秒超时
 
         # Shared memory 泄漏追踪
         self._active_result_shm = set()  # 追踪未清理的 result shared memory
@@ -221,14 +272,23 @@ class PreviewWorkerProcess:
         """检查 worker 进程是否存活"""
         return self.process is not None and self.process.is_alive()
 
-    def request_preview(self, params, convert_to_monochrome: bool = False):
+    def request_preview(self, params,
+                        crop_rect_norm=None,
+                        orientation: int = 0,
+                        idt_gamma: float = 1.0,
+                        convert_to_monochrome: bool = False,
+                        display_metadata: dict = None):
         """请求预览（非阻塞）
 
         只保留最新请求，丢弃旧的未处理请求（预览去重）
 
         Args:
             params: ColorGradingParams 实例
+            crop_rect_norm: 归一化裁剪区域 (x, y, w, h) 或 None
+            orientation: 旋转角度（0/90/180/270）
+            idt_gamma: IDT gamma 值
             convert_to_monochrome: 是否转换为单色
+            display_metadata: 显示状态元数据（crop_focused, crop_overlay等）
         """
         # 检查 worker 是否存活，如果崩溃则尝试重启
         if not self.is_alive():
@@ -245,26 +305,28 @@ class PreviewWorkerProcess:
             except queue.Empty:
                 break
 
+        # 构建请求字典
+        request_dict = {
+            'action': 'preview',
+            'params': params.to_full_dict(),
+            'crop_rect_norm': crop_rect_norm,
+            'orientation': orientation,
+            'idt_gamma': idt_gamma,
+            'convert_to_monochrome': convert_to_monochrome,
+            'display_metadata': display_metadata or {},
+            'timestamp': time.time()
+        }
+
         # 发送新请求
         try:
-            self.queue_request.put({
-                'action': 'preview',
-                'params': params.to_full_dict(),
-                'convert_to_monochrome': convert_to_monochrome,
-                'timestamp': time.time()
-            }, timeout=0.1)
+            self.queue_request.put(request_dict, timeout=0.1)
             self._last_request_time = time.time()
         except queue.Full:
             logger.warning("Request queue full, dropping old request")
             # 再次尝试清空并发送
             try:
                 self.queue_request.get_nowait()
-                self.queue_request.put({
-                    'action': 'preview',
-                    'params': params.to_full_dict(),
-                    'convert_to_monochrome': convert_to_monochrome,
-                    'timestamp': time.time()
-                }, timeout=0.1)
+                self.queue_request.put(request_dict, timeout=0.1)
                 self._last_request_time = time.time()
             except:
                 pass
@@ -318,7 +380,8 @@ class PreviewWorkerProcess:
         if self._last_request_time > 0:
             elapsed = time.time() - self._last_request_time
             if elapsed > self._request_timeout:
-                logger.warning(f"Worker timeout detected ({elapsed:.1f}s > {self._request_timeout}s)")
+                pass
+                #logger.warning(f"Worker timeout detected ({elapsed:.1f}s > {self._request_timeout}s)")
                 # 不自动重启，只记录警告（避免频繁重启）
                 # 用户下次操作时会触发重启
 
