@@ -2524,6 +2524,16 @@ class ApplicationContext(QObject):
         if self._current_image:
             display_metadata['source_wh'] = (self._current_image.width, self._current_image.height)
 
+        # 检测是否需要传递自定义色彩空间定义给worker进程
+        custom_colorspace_def = None
+        cs_name = self._current_params.input_color_space_name
+        if self.color_space_manager.is_custom_color_space(cs_name):
+            # 获取自定义色彩空间的完整定义（primaries, white_point, gamma）
+            custom_colorspace_def = self.color_space_manager.get_color_space_definition(cs_name)
+            if custom_colorspace_def:
+                # 添加色彩空间名称
+                custom_colorspace_def['name'] = cs_name
+
         # 发送预览请求（非阻塞），传递完整的proxy准备参数和显示状态
         self._preview_worker_process.request_preview(
             self._current_params,
@@ -2531,7 +2541,8 @@ class ApplicationContext(QObject):
             orientation=self.get_current_orientation(),
             idt_gamma=self.get_current_idt_gamma(),
             convert_to_monochrome=self.should_convert_to_monochrome(),
-            display_metadata=display_metadata
+            display_metadata=display_metadata,
+            custom_colorspace_def=custom_colorspace_def
         )
 
         # 启动结果轮询定时器

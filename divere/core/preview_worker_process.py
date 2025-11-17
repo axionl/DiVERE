@@ -92,6 +92,7 @@ def _worker_main_loop(
             idt_gamma = request.get('idt_gamma', 1.0)
             convert_to_monochrome = request.get('convert_to_monochrome', False)
             display_metadata = request.get('display_metadata', {})
+            custom_colorspace_def = request.get('custom_colorspace_def')
 
             # 3.4 动态准备proxy（每次根据请求参数执行完整变换链）
             try:
@@ -119,6 +120,25 @@ def _worker_main_loop(
                     working_image.array = the_enlarger.pipeline_processor.math_ops.apply_power(
                         working_image.array, idt_gamma, use_optimization=True
                     )
+
+                # === Step B.5: 注册自定义色彩空间（如果需要）===
+                if custom_colorspace_def:
+                    try:
+                        cs_name = custom_colorspace_def.get('name')
+                        primaries_xy = np.array(custom_colorspace_def.get('primaries_xy'), dtype=float)
+                        white_point_xy = np.array(custom_colorspace_def.get('white_point_xy'), dtype=float)
+                        gamma = float(custom_colorspace_def.get('gamma', 1.0))
+
+                        # 在worker进程的ColorSpaceManager中注册自定义色彩空间
+                        color_space_manager.register_custom_colorspace(
+                            name=cs_name,
+                            primaries_xy=primaries_xy,
+                            white_point_xy=white_point_xy,
+                            gamma=gamma
+                        )
+                    except Exception as e:
+                        # 注册失败不应导致预览失败，记录错误并继续
+                        logger.warning(f"Failed to register custom colorspace in worker: {e}")
 
                 # === Step C: Color Transform ===
                 working_image = color_space_manager.set_image_color_space(
@@ -277,7 +297,8 @@ class PreviewWorkerProcess:
                         orientation: int = 0,
                         idt_gamma: float = 1.0,
                         convert_to_monochrome: bool = False,
-                        display_metadata: dict = None):
+                        display_metadata: dict = None,
+                        custom_colorspace_def: dict = None):
         """请求预览（非阻塞）
 
         只保留最新请求，丢弃旧的未处理请求（预览去重）
@@ -289,6 +310,7 @@ class PreviewWorkerProcess:
             idt_gamma: IDT gamma 值
             convert_to_monochrome: 是否转换为单色
             display_metadata: 显示状态元数据（crop_focused, crop_overlay等）
+            custom_colorspace_def: 自定义色彩空间定义（用于动态注册的primaries）
         """
         # 检查 worker 是否存活，如果崩溃则尝试重启
         if not self.is_alive():
@@ -314,6 +336,7 @@ class PreviewWorkerProcess:
             'idt_gamma': idt_gamma,
             'convert_to_monochrome': convert_to_monochrome,
             'display_metadata': display_metadata or {},
+            'custom_colorspace_def': custom_colorspace_def,
             'timestamp': time.time()
         }
 
