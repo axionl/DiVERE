@@ -1151,7 +1151,7 @@ class MainWindow(QMainWindow):
         self._ccm_worker = worker
         self._ccm_progress_dialog = progress_dialog
 
-        self.context.thread_pool.start(worker)
+        self.context.ensure_thread_pool().start(worker)
         print(f"[DEBUG] 启动轮询检查")
         # 使用类方法替代闭包，避免内存泄漏
         QTimer.singleShot(150, self._ccm_poll_worker_completion)

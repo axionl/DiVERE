@@ -237,7 +237,22 @@ class ApplicationContext(QObject):
         # 默认曲线改由 default preset 决定；此处不再强行加载硬编码曲线
 
         return params
-    
+
+    def ensure_thread_pool(self) -> QThreadPool:
+        """确保线程池已初始化并返回
+
+        在进程隔离模式下，某些功能（如CCM优化）仍需要使用线程池。
+        此方法按需创建线程池，避免在__init__中条件创建导致的兼容问题。
+
+        Returns:
+            QThreadPool: 全局线程池实例
+        """
+        if not hasattr(self, 'thread_pool') or self.thread_pool is None:
+            self.thread_pool = QThreadPool.globalInstance()
+            self.thread_pool.setMaxThreadCount(1)
+            self.thread_pool.setStackSize(8 * 1024 * 1024)  # 8MB
+        return self.thread_pool
+
     def _load_smart_default_preset(self, file_path: str):
         """使用智能预设加载器加载默认预设"""
         try:
@@ -2549,14 +2564,8 @@ class ApplicationContext(QObject):
         worker.signals.error.connect(self._on_preview_error)
         worker.signals.finished.connect(self._on_preview_finished)
 
-        # 确保线程池已初始化
-        if not hasattr(self, 'thread_pool') or self.thread_pool is None:
-            from PySide6.QtCore import QThreadPool
-            self.thread_pool = QThreadPool.globalInstance()
-            self.thread_pool.setMaxThreadCount(1)
-            self.thread_pool.setStackSize(8 * 1024 * 1024)
-
-        self.thread_pool.start(worker)
+        # 使用 ensure_thread_pool() 统一处理线程池创建
+        self.ensure_thread_pool().start(worker)
 
     def _poll_preview_result(self):
         """定期轮询结果队列（~60 FPS）"""
