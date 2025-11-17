@@ -134,16 +134,17 @@ class TheEnlarger:
             monochrome_converter=monochrome_converter
         )
 
-    def apply_density_inversion(self, image: ImageData, gamma: float, dmax: float) -> ImageData:
+    def apply_density_inversion(self, image: ImageData, gamma: float, dmax: float,
+                               invert: bool = True) -> ImageData:
         """应用密度反转（保持向后兼容的接口）"""
-        if image.array is None: 
+        if image.array is None:
             return image
-        
+
         # This now directly calls the pipeline processor's math_ops
         result_array = self.pipeline_processor.math_ops.density_inversion(
-            image.array, gamma, dmax, use_optimization=True
+            image.array, gamma, dmax, invert=invert, use_optimization=True
         )
-        
+
         return image.copy_with_new_array(result_array)
 
     # =======================

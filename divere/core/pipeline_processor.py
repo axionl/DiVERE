@@ -151,12 +151,13 @@ class FilmPipelineProcessor:
         # 2.5 IDT阶段monochrome转换（移除 - 现在在显示阶段处理）
         profile['idt_monochrome_ms'] = 0.0
         
-        # 3. 图片级别的dmax/gamma调整（使用LUT优化）
+        # 3. 图片级别的dmax/gamma调整（使用LUT优化，始终执行）
         t2 = time.time()
-        if params.enable_density_inversion:
-            proxy_array = self.math_ops.density_inversion(
-                proxy_array, params.density_gamma, params.density_dmax, use_optimization=True
-            )
+        proxy_array = self.math_ops.density_inversion(
+            proxy_array, params.density_gamma, params.density_dmax,
+            invert=params.enable_density_inversion,
+            use_optimization=True
+        )
         profile['gamma_dmax_ms'] = (time.time() - t2) * 1000.0
         
         # 4. 套LUT（完整数学管线的其余部分，强制禁用并行）

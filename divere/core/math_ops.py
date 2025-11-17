@@ -185,21 +185,22 @@ class FilmMathOps:
     # 1. 密度反相操作
     # =======================
     
-    def density_inversion(self, image_array: np.ndarray, gamma: float, dmax: float, 
-                         pivot: float = 0.7, use_optimization: bool = True,
+    def density_inversion(self, image_array: np.ndarray, gamma: float, dmax: float,
+                         pivot: float = 0.7, invert: bool = True, use_optimization: bool = True,
                          use_parallel: bool = True, use_gpu: bool = True) -> np.ndarray:
         """
         密度反相操作（支持GPU加速、多线程并行）
-        
+
         Args:
             image_array: 输入图像数组 [H, W, 3]，值域 [0, 1]
             gamma: gamma值
             dmax: dmax值
             pivot: 转轴值，默认0.9（三档曝光）
+            invert: 是否反转密度（True: -log, False: +log）
             use_optimization: 是否使用优化版本（LUT查表）
             use_parallel: 是否使用并行处理
             use_gpu: 是否尝试使用GPU加速
-            
+
         Returns:
             反相后的图像数组
         """
@@ -208,67 +209,68 @@ class FilmMathOps:
         
         # GPU加速（仅在优化模式下启用，导出时强制使用CPU保证精度）
         if (use_gpu and use_optimization and
-            self.gpu_accelerator and 
+            self.gpu_accelerator and
             self.preview_config.should_use_gpu(image_array.size)):
             try:
                 return self.gpu_accelerator.density_inversion_accelerated(
-                    image_array, gamma, dmax, pivot
+                    image_array, gamma, dmax, pivot, invert
                 )
             except Exception as e:
                 # GPU失败，回退到CPU
                 print(f"⚠️  GPU加速失败，回退到CPU: {e}")
-        
+
         # CPU处理路径
         should_parallel = self._should_use_parallel(image_array.size, use_parallel)
-        
+
         if use_optimization:
             if should_parallel:
-                return self._density_inversion_lut_parallel(image_array, gamma, dmax, pivot)
+                return self._density_inversion_lut_parallel(image_array, gamma, dmax, pivot, invert)
             else:
-                return self._density_inversion_lut_optimized(image_array, gamma, dmax, pivot)
+                return self._density_inversion_lut_optimized(image_array, gamma, dmax, pivot, invert)
         else:
             if should_parallel:
-                return self._density_inversion_direct_parallel(image_array, gamma, dmax, pivot)
+                return self._density_inversion_direct_parallel(image_array, gamma, dmax, pivot, invert)
             else:
-                return self._density_inversion_direct(image_array, gamma, dmax, pivot)
+                return self._density_inversion_direct(image_array, gamma, dmax, pivot, invert)
     
-    def _density_inversion_direct(self, image_array: np.ndarray, gamma: float, 
-                                 dmax: float, pivot: float) -> np.ndarray:
+    def _density_inversion_direct(self, image_array: np.ndarray, gamma: float,
+                                 dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """直接计算版本的密度反相"""
         # 避免log(0)
         safe_array = np.maximum(image_array, 1e-10)
-        
-        # 计算原始密度
-        original_density = -np.log10(safe_array)
-        
+
+        # 计算原始密度（根据 invert 控制正负号）
+        log_img = np.log10(safe_array)
+        original_density = -log_img if invert else log_img
+
         # 应用gamma和dmax调整
         adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-        
+
         # 转回线性空间（与LUT版本保持一致）
         result = np.power(10.0, adjusted_density)
-        
+
         return result.astype(image_array.dtype)
     
-    def _density_inversion_lut_optimized(self, image_array: np.ndarray, gamma: float, 
-                                        dmax: float, pivot: float) -> np.ndarray:
+    def _density_inversion_lut_optimized(self, image_array: np.ndarray, gamma: float,
+                                        dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """优化版本：使用LUT查表"""
         lut_size = 32768  # 优化：32K比65K更快且精度相同
-        lut = self._get_density_inversion_lut(gamma, dmax, pivot, lut_size)
-        
+        lut = self._get_density_inversion_lut(gamma, dmax, pivot, invert, lut_size)
+
         # 将浮点图像转换为整数索引
         img_clipped = np.clip(image_array, 0.0, 1.0)
         indices = np.round(img_clipped * (lut_size - 1)).astype(np.uint16)
-        
+
         # 查表
         result_array = np.take(lut, indices)
-        
+
         return result_array.astype(image_array.dtype)
     
-    def _density_inversion_lut_parallel(self, image_array: np.ndarray, gamma: float, 
-                                       dmax: float, pivot: float) -> np.ndarray:
+    def _density_inversion_lut_parallel(self, image_array: np.ndarray, gamma: float,
+                                       dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """并行版本：分块处理+LUT查表"""
         lut_size = 32768
-        lut = self._get_density_inversion_lut(gamma, dmax, pivot, lut_size)
+        lut = self._get_density_inversion_lut(gamma, dmax, pivot, invert, lut_size)
         
         h, w, c = image_array.shape
         result = np.zeros_like(image_array)
@@ -306,32 +308,33 @@ class FilmMathOps:
         
         return result
     
-    def _density_inversion_direct_parallel(self, image_array: np.ndarray, gamma: float, 
-                                          dmax: float, pivot: float) -> np.ndarray:
+    def _density_inversion_direct_parallel(self, image_array: np.ndarray, gamma: float,
+                                          dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """并行版本：分块处理+直接计算"""
         h, w, c = image_array.shape
         result = np.zeros_like(image_array)
-        
+
         # 计算分块数量
         blocks_h = (h + self.block_size - 1) // self.block_size
         blocks_w = (w + self.block_size - 1) // self.block_size
-        
+
         def process_block(args):
             i, j = args
             start_h = i * self.block_size
             end_h = min((i + 1) * self.block_size, h)
             start_w = j * self.block_size
             end_w = min((j + 1) * self.block_size, w)
-            
+
             # 提取块
             block = image_array[start_h:end_h, start_w:end_w, :]
-            
-            # 直接计算密度反相（修正公式与LUT版本一致）
+
+            # 直接计算密度反相（根据 invert 控制正负号）
             safe_block = np.maximum(block, 1e-10)
-            original_density = -np.log10(safe_block)
+            log_img = np.log10(safe_block)
+            original_density = -log_img if invert else log_img
             adjusted_density = pivot + (original_density - pivot) * gamma - dmax
             block_result = np.power(10.0, adjusted_density)  # 修正：与LUT版本一致
-            
+
             return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))
         
         # 并行处理所有块
@@ -346,23 +349,24 @@ class FilmMathOps:
         
         return result
     
-    def _get_density_inversion_lut(self, gamma: float, dmax: float, pivot: float, 
-                                  size: int = 32768) -> np.ndarray:
+    def _get_density_inversion_lut(self, gamma: float, dmax: float, pivot: float,
+                                  invert: bool = True, size: int = 32768) -> np.ndarray:
         """获取或生成密度反相LUT"""
-        key = ("dens_inv", round(float(gamma), 6), round(float(dmax), 6), 
-               round(float(pivot), 6), int(size))
+        key = ("dens_inv", round(float(gamma), 6), round(float(dmax), 6),
+               round(float(pivot), 6), bool(invert), int(size))
         lut = self._lut1d_cache.get(key)
-        
+
         if lut is None:
-            # 生成LUT
+            # 生成LUT（根据 invert 控制正负号）
             xs = np.linspace(0.0, 1.0, int(size), dtype=np.float64)
             safe = np.maximum(xs, 1e-10)
-            original_density = -np.log10(safe)
+            log_img = np.log10(safe)
+            original_density = -log_img if invert else log_img
             adjusted_density = pivot + (original_density - pivot) * gamma - dmax
             lut = np.power(10.0, adjusted_density).astype(np.float64)
-            
+
             self._cache_put(self._lut1d_cache, key, lut)
-        
+
         return lut
     
     # =======================
@@ -1330,16 +1334,16 @@ class FilmMathOps:
             profile.clear()
             
         result_array = image_array.copy()
-        
-        # 1. 密度反相
-        if enable_density_inversion:
-            t0 = time.time()
-            result_array = self.density_inversion(
-                result_array, params.density_gamma, params.density_dmax,
-                use_optimization=use_optimization
-            )
-            if profile is not None:
-                profile['density_inversion_ms'] = (time.time() - t0) * 1000.0
+
+        # 1. 密度反相（始终执行，通过 invert 参数控制正负号）
+        t0 = time.time()
+        result_array = self.density_inversion(
+            result_array, params.density_gamma, params.density_dmax,
+            invert=enable_density_inversion,
+            use_optimization=use_optimization
+        )
+        if profile is not None:
+            profile['density_inversion_ms'] = (time.time() - t0) * 1000.0
         
         # 2. 转为密度空间
         t1 = time.time()

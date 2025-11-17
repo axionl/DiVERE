@@ -193,18 +193,20 @@ class OpenCLEngine(GPUComputeEngine):
                                        const float gamma,
                                        const float dmax,
                                        const float pivot,
+                                       const int invert,
                                        const int size)
         {
             int i = get_global_id(0);
             if (i >= size) return;
-            
+
             // 避免log(0)
             float safe_val = fmax(input[i], 1e-10f);
-            
-            // 密度反相计算
-            float original_density = -log10(safe_val);
+
+            // 密度反相计算（根据 invert 控制正负号）
+            float log_img = log10(safe_val);
+            float original_density = invert ? -log_img : log_img;
             float adjusted_density = pivot + (original_density - pivot) * gamma - dmax;
-            
+
             // 转回线性空间
             output[i] = pow(10.0f, adjusted_density);
         }
@@ -279,13 +281,13 @@ class OpenCLEngine(GPUComputeEngine):
             "max_work_group_size": self.device.max_work_group_size
         }
     
-    def density_inversion_gpu(self, image: np.ndarray, gamma: float, 
-                             dmax: float, pivot: float) -> np.ndarray:
+    def density_inversion_gpu(self, image: np.ndarray, gamma: float,
+                             dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """GPU加速的密度反相"""
         if not self.is_available():
             raise RuntimeError("OpenCL不可用")
-        
-        debug(f"OpenCL密度反相处理: 图像{image.shape}, gamma={gamma:.3f}", "GPU")
+
+        debug(f"OpenCL密度反相处理: 图像{image.shape}, gamma={gamma:.3f}, invert={invert}", "GPU")
         
         try:
             # 展平数组以简化处理
@@ -313,6 +315,7 @@ class OpenCLEngine(GPUComputeEngine):
                 self.queue, global_size, None,
                 input_buf, output_buf,
                 np.float32(gamma), np.float32(dmax), np.float32(pivot),
+                np.int32(1 if invert else 0),  # OpenCL 使用 int 表示 bool
                 np.int32(len(image_flat))
             )
             
@@ -435,22 +438,23 @@ class CUDAEngine(GPUComputeEngine):
             "memory_mb": device.mem_info[1] // 1024 // 1024
         }
     
-    def density_inversion_gpu(self, image: np.ndarray, gamma: float, 
-                             dmax: float, pivot: float) -> np.ndarray:
+    def density_inversion_gpu(self, image: np.ndarray, gamma: float,
+                             dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         if not self.is_available():
             raise RuntimeError("CUDA不可用")
-        
+
         # 转移到GPU
         image_gpu = cp.asarray(image)
-        
+
         # 避免log(0)
         safe_img = cp.maximum(image_gpu, 1e-10)
-        
-        # 密度反相计算
-        original_density = -cp.log10(safe_img)
+
+        # 密度反相计算（根据 invert 控制正负号）
+        log_img = cp.log10(safe_img)
+        original_density = -log_img if invert else log_img
         adjusted_density = pivot + (original_density - pivot) * gamma - dmax
         result_gpu = cp.power(10.0, adjusted_density)
-        
+
         # 转回CPU
         return cp.asnumpy(result_gpu)
     
@@ -507,15 +511,17 @@ class MetalEngine(GPUComputeEngine):
                                      constant float& gamma [[buffer(2)]],
                                      constant float& dmax [[buffer(3)]],
                                      constant float& pivot [[buffer(4)]],
+                                     constant bool& invert [[buffer(5)]],
                                      uint index [[thread_position_in_grid]])
         {
             // 确保与CPU版本相同的精度处理
             float safe_val = max(input[index], 1e-10f);
-            
-            // 密度反相计算 - 使用高精度数学函数
-            float original_density = -log10(safe_val);
+
+            // 密度反相计算 - 根据 invert 控制正负号
+            float log_img = log10(safe_val);
+            float original_density = invert ? -log_img : log_img;
             float adjusted_density = pivot + (original_density - pivot) * gamma - dmax;
-            
+
             // 转回线性空间 - 使用precise标志确保精度
             output[index] = precise::pow(10.0f, adjusted_density);
         }
@@ -588,8 +594,8 @@ class MetalEngine(GPUComputeEngine):
             "low_power": self.device.isLowPower()
         }
     
-    def density_inversion_gpu(self, image: np.ndarray, gamma: float, 
-                             dmax: float, pivot: float) -> np.ndarray:
+    def density_inversion_gpu(self, image: np.ndarray, gamma: float,
+                             dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """Metal加速的密度反相"""
         if not self.is_available():
             raise RuntimeError("Metal不可用")
@@ -626,7 +632,13 @@ class MetalEngine(GPUComputeEngine):
             np.array([pivot], dtype=np.float32).tobytes(), 4,
             Metal.MTLResourceStorageModeShared
         )
-        
+
+        # invert 参数缓冲区（Metal 支持 bool 类型）
+        invert_buffer = self.device.newBufferWithBytes_length_options_(
+            np.array([invert], dtype=np.bool_).tobytes(), 1,
+            Metal.MTLResourceStorageModeShared
+        )
+
         # 创建计算管线
         function = self.library.newFunctionWithName_("density_inversion")
         pipeline_state = self.device.newComputePipelineStateWithFunction_error_(function, None)[0]
@@ -642,6 +654,7 @@ class MetalEngine(GPUComputeEngine):
         compute_encoder.setBuffer_offset_atIndex_(gamma_buffer, 0, 2)
         compute_encoder.setBuffer_offset_atIndex_(dmax_buffer, 0, 3)
         compute_encoder.setBuffer_offset_atIndex_(pivot_buffer, 0, 4)
+        compute_encoder.setBuffer_offset_atIndex_(invert_buffer, 0, 5)
         
         # 计算线程网格
         threads_per_threadgroup = Metal.MTLSize(256, 1, 1)
@@ -837,22 +850,22 @@ class GPUAccelerator:
                 return True
         return False
     
-    def density_inversion_accelerated(self, image: np.ndarray, gamma: float, 
-                                     dmax: float, pivot: float) -> np.ndarray:
+    def density_inversion_accelerated(self, image: np.ndarray, gamma: float,
+                                     dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """GPU加速的密度反相，自动回退到CPU"""
         if not self.is_available():
             debug("没有可用的GPU引擎，使用CPU处理密度反相", "GPU")
-            return self._density_inversion_cpu(image, gamma, dmax, pivot)
-        
+            return self._density_inversion_cpu(image, gamma, dmax, pivot, invert)
+
         try:
             debug(f"使用{type(self.active_engine).__name__}处理密度反相", "GPU")
-            result = self.active_engine.density_inversion_gpu(image, gamma, dmax, pivot)
+            result = self.active_engine.density_inversion_gpu(image, gamma, dmax, pivot, invert)
             debug("GPU密度反相处理成功", "GPU")
             return result
         except Exception as e:
             error(f"GPU加速失败，回退到CPU: {e}", "GPU")
             debug(f"GPU失败详情: {e}", "GPU")
-            return self._density_inversion_cpu(image, gamma, dmax, pivot)
+            return self._density_inversion_cpu(image, gamma, dmax, pivot, invert)
     
     def curve_processing_accelerated(self, density_array: np.ndarray, 
                                    lut: np.ndarray) -> np.ndarray:
@@ -871,12 +884,13 @@ class GPUAccelerator:
             debug(f"GPU失败详情: {e}", "GPU")
             return self._curve_processing_cpu(density_array, lut)
     
-    def _density_inversion_cpu(self, image: np.ndarray, gamma: float, 
-                              dmax: float, pivot: float) -> np.ndarray:
+    def _density_inversion_cpu(self, image: np.ndarray, gamma: float,
+                              dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """CPU版本的密度反相（回退方案）"""
-        debug(f"CPU密度反相处理: 图像{image.shape}, gamma={gamma:.3f}", "GPU")
+        debug(f"CPU密度反相处理: 图像{image.shape}, gamma={gamma:.3f}, invert={invert}", "GPU")
         safe_img = np.maximum(image, 1e-10)
-        original_density = -np.log10(safe_img)
+        log_img = np.log10(safe_img)
+        original_density = -log_img if invert else log_img
         adjusted_density = pivot + (original_density - pivot) * gamma - dmax
         result = np.power(10.0, adjusted_density)
         debug("CPU密度反相处理完成", "GPU")
