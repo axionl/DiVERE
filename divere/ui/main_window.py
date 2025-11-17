@@ -2578,11 +2578,18 @@ class MainWindow(QMainWindow):
         """
         try:
             # 规范输入为 (3,2) 数组顺序 R,G,B
-            arr = np.array([primaries_xy['R'], primaries_xy['G'], primaries_xy['B']], dtype=float)
+            primaries_xy = np.array([primaries_xy['R'], primaries_xy['G'], primaries_xy['B']], dtype=float)
+            white_point_xy = np.array([0.32168, 0.33767])
+            gamma = float(self.parameter_panel.idt_gamma_spinbox.value())
             base_name = self.context.get_input_color_space().replace("_custom", "").replace("_preset", "")
             temp_name = f"{base_name}_custom"
             # 注册/覆盖临时空间（gamma=1.0，白点D65）
-            self.context.color_space_manager.register_custom_colorspace(temp_name, arr, None, gamma=1.0)
+            self.context.color_space_manager.register_custom_colorspace(
+                name=temp_name,
+                primaries_xy=primaries_xy,
+                white_point_xy=white_point_xy,
+                gamma=gamma
+            )
             # 切换输入色彩变换（Context 内部会重建代理并刷新预览）
             self.context.set_input_color_space(temp_name)
             # 不修改其他调色参数，仅切换输入空间
