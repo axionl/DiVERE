@@ -107,11 +107,10 @@ class AutoPresetManager:
         为指定图像文件保存或更新预设。
         """
         image_filename = Path(image_path).name
-        # 若该图像已有 bundle，则更新其 contactsheet；否则按旧格式保存单 preset
+        # 迁移期：保存single preset时，若存在同名bundle，移除bundle以避免歧义
         if image_filename in self._bundles:
-            self._bundles[image_filename].contactsheet = preset
-        else:
-            self._presets[image_filename] = preset
+            del self._bundles[image_filename]
+        self._presets[image_filename] = preset
         self._save_presets_to_file()
 
     def get_current_preset_file_path(self) -> Optional[Path]:
