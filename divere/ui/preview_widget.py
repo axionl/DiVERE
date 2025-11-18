@@ -1372,7 +1372,7 @@ class PreviewWidget(QWidget):
         """
         if array.dtype != np.uint8:
             array = np.clip(array, 0, 1)
-            array = (array * 255).astype(np.uint8)
+            array = np.round(array * 255).astype(np.uint8)
 
         # 确保数组是连续的内存布局（旋转后可能不连续）
         if not array.flags['C_CONTIGUOUS']:

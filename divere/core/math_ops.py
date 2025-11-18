@@ -206,7 +206,7 @@ class FilmMathOps:
         """
         if image_array is None or image_array.size == 0:
             return image_array
-        
+
         # GPU加速（仅在优化模式下启用，导出时强制使用CPU保证精度）
         if (use_gpu and use_optimization and
             self.gpu_accelerator and
@@ -237,6 +237,7 @@ class FilmMathOps:
                                  dmax: float, pivot: float, invert: bool = True) -> np.ndarray:
         """直接计算版本的密度反相"""
         # 避免log(0)
+
         safe_array = np.maximum(image_array, 1e-10)
 
         # 计算原始密度（根据 invert 控制正负号）
@@ -682,7 +683,7 @@ class FilmMathOps:
         
         # 一次性归一化所有通道（向量化）
         normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
-        indices = (normalized * lut_scale).astype(np.uint16, copy=False)
+        indices = np.round(normalized * lut_scale).astype(np.uint16, copy=False)
         
         # 向量化处理所有通道
         for channel_idx, merged_lut in enumerate(channel_luts):
@@ -740,8 +741,8 @@ class FilmMathOps:
             
             # 归一化处理
             normalized = 1.0 - np.clip(block_result * inv_range, 0.0, 1.0)
-            indices = (normalized * lut_scale).astype(np.uint16, copy=False)
-            
+            indices = np.round(normalized * lut_scale).astype(np.uint16, copy=False)
+
             # 处理每个通道
             for channel_idx, merged_lut in enumerate(channel_luts):
                 if merged_lut is not None:
@@ -947,7 +948,7 @@ class FilmMathOps:
         normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
         
         # 转换为整数索引（只做一次）
-        indices = (normalized * (lut_size - 1)).astype(np.uint16)  # uint16更快
+        indices = np.round(normalized * (lut_size - 1)).astype(np.uint16)  # uint16更快
         
         # 应用RGB通用曲线（如果存在）
         if curve_points and len(curve_points) >= 2:
@@ -957,7 +958,7 @@ class FilmMathOps:
             
             # 重新计算归一化（因为值已改变）
             normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
-            indices = (normalized * (lut_size - 1)).astype(np.uint16)
+            indices = np.round(normalized * (lut_size - 1)).astype(np.uint16)
         
         # 应用单通道曲线（向量化版本）
         if channel_curves:
@@ -1357,8 +1358,27 @@ class FilmMathOps:
         """
         if profile is not None:
             profile.clear()
-            
+
         result_array = image_array.copy()
+
+        # 如果密度反相未启用，检查是否需要完全跳过密度处理
+        if not enable_density_inversion:
+            # 检查是否有任何密度空间处理需要执行
+            has_density_processing = (
+                params.enable_density_matrix or
+                params.enable_rgb_gains or
+                (include_curve and params.enable_density_curve)
+            )
+
+            if not has_density_processing:
+                # 完全跳过密度处理，直接返回输入
+                if profile is not None:
+                    profile['density_inversion_ms'] = 0.0
+                    profile['to_density_ms'] = 0.0
+                    profile['density_matrix_ms'] = 0.0
+                    profile['rgb_gains_ms'] = 0.0
+                    profile['density_curves_ms'] = 0.0
+                return result_array
 
         # 1. 密度反相（始终执行，通过 invert 参数控制正负号）
         t0 = time.time()
@@ -1369,7 +1389,7 @@ class FilmMathOps:
         )
         if profile is not None:
             profile['density_inversion_ms'] = (time.time() - t0) * 1000.0
-        
+
         # 2. 转为密度空间
         t1 = time.time()
         density_array = self.linear_to_density(result_array)

@@ -178,7 +178,7 @@ class TheEnlarger:
             t0 = time.time()
             img_uint8 = image.array.copy()
             if img_uint8.max() <= 1.0:
-                img_uint8 = (img_uint8 * 255).astype(np.uint8)
+                img_uint8 = np.round(img_uint8 * 255).astype(np.uint8)
 
             # 使用深度学习模型进行白平衡
             # 缓存与复用模型，避免每次加载

@@ -473,11 +473,11 @@ class ImageManager:
         ext = output_path.suffix.lower()
         
         if bit_depth == 16 and ext in ['.png', '.tiff', '.tif']:
-            # 16bit保存
-            image_array = (image_array * 65535).astype(np.uint16)
+            # 16bit保存 - 使用 round 避免截断误差
+            image_array = np.round(image_array * 65535).astype(np.uint16)
         else:
-            # 8bit保存
-            image_array = (image_array * 255).astype(np.uint8)
+            # 8bit保存 - 使用 round 避免截断误差
+            image_array = np.round(image_array * 255).astype(np.uint8)
         
         # 根据文件扩展名选择保存格式
         ext = output_path.suffix.lower()
