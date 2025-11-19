@@ -372,19 +372,18 @@ class CurveEditWidget(QWidget):
         painter.setPen(QPen(self.grid_color, 1))
         
         # 横向网格线（对应Y轴密度值）
-        # Y轴从上到下：0.0到3.0密度，每0.3一格
-        y_density_max = 3.0
-        y_density_step = 0.3
-        num_y_lines = int(y_density_max / y_density_step) + 1
-        
-        for i in range(num_y_lines):
-            density = i * y_density_step
-            # 将密度映射到[0,1]范围（0密度在顶部，3.0密度在底部）
-            norm_y = density / y_density_max
+        # Y轴从上到下：2.33到-13.67密度，每整数一格
+        y_density_min = -13.67
+        y_density_max = 2.33
+        y_density_range = y_density_max - y_density_min
+
+        for i in range(-13, 3):  # -13, -12, ..., 0, 1, 2
+            density = float(i)
+            # 将密度映射到归一化坐标[0,1]，其中0对应顶部，1对应底部
+            norm_y = (y_density_max - density) / y_density_range
             y = draw_rect.top() + norm_y * draw_rect.height()
-            if y <= draw_rect.bottom():
-                painter.drawLine(int(draw_rect.left()), int(y), 
-                               int(draw_rect.right()), int(y))
+            painter.drawLine(int(draw_rect.left()), int(y),
+                           int(draw_rect.right()), int(y))
         
         # 垂直网格线（对应X轴密度值）
         # X轴从左到右：0到log10(65536)≈4.816密度，每0.3一格
@@ -456,17 +455,16 @@ class CurveEditWidget(QWidget):
         painter.setFont(font)
 
         # 绘制Y轴标签（密度值）
-        y_density_max = 3.0
-        y_density_step = 0.3
-        
-        for i in range(int(y_density_max / y_density_step) + 1):
-            density = i * y_density_step
-            if density <= y_density_max:
-                # 将密度映射到曲线坐标（0密度在顶部=y_val=0，3.0密度在底部=y_val=1）
-                y_val = density / y_density_max
-                _wx, wy = self._curve_to_widget_coords(0, y_val)
-                # 显示时Y轴是反向的（0在顶部）
-                painter.drawText(5, wy + 4, f"{density:.1f}")
+        y_density_min = -13.67
+        y_density_max = 2.33
+        y_density_range = y_density_max - y_density_min
+
+        for i in range(-13, 3):  # -13, -12, ..., 0, 1, 2
+            density = float(i)
+            # 将密度映射到归一化坐标[0,1]，其中0对应顶部，1对应底部
+            norm_y = (y_density_max - density) / y_density_range
+            y = draw_rect.top() + norm_y * draw_rect.height()
+            painter.drawText(20, int(y) + 4, f"{int(density)}")
 
         # 绘制X轴标签（密度值）
         x_density_max = np.log10(65536)  # ≈ 4.816
@@ -496,7 +494,7 @@ class CurveEditWidget(QWidget):
         painter.save()
         painter.translate(15, int(draw_rect.center().y()))
         painter.rotate(-90)
-        y_title = "输出密度"
+        y_title = "SDR EV值"
         y_title_width = painter.fontMetrics().horizontalAdvance(y_title)
         painter.setPen(QPen(self.text_color, 1))
         painter.drawText(-y_title_width // 2, -5, y_title)
@@ -507,12 +505,12 @@ class CurveEditWidget(QWidget):
         try:
             if (theme or "dark").lower() == "dark":
                 self.background_color = QColor(45, 45, 45)
-                self.grid_color = QColor(90, 90, 90)
+                self.grid_color = QColor(150, 150, 150)  # 更亮的网格线
                 self.curve_color = QColor(220, 220, 220)
                 self.point_color = QColor(210, 210, 210)
                 self.selected_point_color = QColor(255, 255, 255)
                 self.text_color = QColor(230, 230, 230)
-                self.frame_color = QColor(120, 120, 120)
+                self.frame_color = QColor(200, 200, 200)  # 更亮的边框
                 self.channel_colors = {
                     'RGB': QColor(220, 220, 220),
                     'R': QColor(255, 120, 120, 180),
@@ -521,7 +519,7 @@ class CurveEditWidget(QWidget):
                 }
             else:
                 self.background_color = palette.window().color() if hasattr(palette, 'window') else QColor(250, 250, 250)
-                self.grid_color = QColor(220, 220, 220)
+                self.grid_color = QColor(160, 160, 160)  # 更暗的网格线，提高对比度
                 self.curve_color = QColor(80, 80, 80)
                 self.point_color = QColor(100, 100, 100)
                 self.selected_point_color = QColor(60, 60, 60)

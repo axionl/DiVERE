@@ -15,7 +15,8 @@
       100
     ],
     "proxy_max_size": 1500,
-    "use_process_isolation": "auto"
+    "use_process_isolation": "auto",
+    "theme": "dark"
   },
   "defaults": {
     "input_color_space": "sRGB",

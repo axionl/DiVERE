@@ -69,6 +69,11 @@ class MainWindow(QMainWindow):
             app = QApplication.instance()
             saved_theme = enhanced_config_manager.get_ui_setting("theme", "dark")
             apply_theme(app, saved_theme)
+            # 将主题传递给曲线编辑器的自绘颜色
+            try:
+                self.parameter_panel.curve_editor.curve_edit_widget.apply_palette(app.palette(), saved_theme)
+            except Exception:
+                pass
         except Exception as _:
             pass
         
