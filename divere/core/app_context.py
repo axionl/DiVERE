@@ -35,35 +35,52 @@ class _PreviewWorker(QRunnable):
 
     @Slot()
     def run(self):
+        print("[DEBUG] PreviewWorker.run() 开始执行", flush=True)
         # —— 关键点：把大对象搬到局部变量，再把 self 上的引用清掉 ——
         image = self.image
         params = self.params
         self.image = None
         self.params = None
+        print(f"[DEBUG] PreviewWorker.run(): 图像尺寸={image.width}x{image.height}", flush=True)
+
         try:
+            print("[DEBUG] PreviewWorker.run(): 准备monochrome_converter", flush=True)
             monochrome_converter = None
             if self.convert_to_monochrome_in_idt:
                 monochrome_converter = self.color_space_manager.convert_to_monochrome
+                print("[DEBUG] PreviewWorker.run(): 将使用monochrome转换", flush=True)
 
+            print("[DEBUG] PreviewWorker.run(): 开始apply_full_pipeline...", flush=True)
             result_image = self.the_enlarger.apply_full_pipeline(
                 image,
                 params,
                 convert_to_monochrome_in_idt=self.convert_to_monochrome_in_idt,
                 monochrome_converter=monochrome_converter,
             )
+            print(f"[DEBUG] PreviewWorker.run(): apply_full_pipeline完成，结果尺寸={result_image.width}x{result_image.height}", flush=True)
+
+            print("[DEBUG] PreviewWorker.run(): 开始convert_to_display_space...", flush=True)
             result_image = self.color_space_manager.convert_to_display_space(
                 result_image, "DisplayP3"
             )
+            print("[DEBUG] PreviewWorker.run(): convert_to_display_space完成", flush=True)
+
+            print("[DEBUG] PreviewWorker.run(): 发射result信号", flush=True)
             self.signals.result.emit(result_image)
+            print("[DEBUG] PreviewWorker.run(): result信号已发射", flush=True)
 
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            self.signals.error.emit(f"{e}\n{tb}")
+            error_msg = f"{e}\n{tb}"
+            print(f"[ERROR] PreviewWorker.run(): 处理失败: {error_msg}", flush=True)
+            self.signals.error.emit(error_msg)
 
         finally:
             # 不再依赖 del，只发 finished，实际引用已经在上面提前断掉了
+            print("[DEBUG] PreviewWorker.run(): 发射finished信号", flush=True)
             self.signals.finished.emit()
+            print("[DEBUG] PreviewWorker.run() 执行完成", flush=True)
 
 
 class ApplicationContext(QObject):
@@ -1766,20 +1783,24 @@ class ApplicationContext(QObject):
         - Crop rect调整：需要重建
         - IDT/Rotate/Color修改：不需要重建（在worker中处理）
         """
+        print("[DEBUG] _prepare_proxy() 开始执行", flush=True)
+
         if not self._current_image:
+            print("[WARNING] _prepare_proxy(): 没有当前图像，提前返回", flush=True)
             return
 
         # 源图
         src_image = self._current_image
         orig_h, orig_w = src_image.height, src_image.width
+        print(f"[DEBUG] _prepare_proxy(): 源图尺寸={orig_w}x{orig_h}, crop_focused={self._crop_focused}", flush=True)
 
         # === 模式判断：是否需要预先crop ===
         if self._crop_focused:
-            print("DEBUG: _prepare_proxy: 准备crop后的proxy")
+            print("[DEBUG] _prepare_proxy(): Crop focused模式，准备crop后的proxy", flush=True)
             # Crop focused模式：先crop再downsample（保证质量）
             crop_instance = self.get_active_crop_instance()
             if crop_instance and crop_instance.rect_norm and src_image.array is not None:
-                print("DEBUG: _prepare_proxy: 多裁剪聚焦模式")
+                print("[DEBUG] _prepare_proxy(): 多裁剪聚焦模式", flush=True)
                 try:
                     x, y, w, h = crop_instance.rect_norm
                     x0 = int(round(x * orig_w))
@@ -1792,13 +1813,14 @@ class ApplicationContext(QObject):
                     y1 = max(y0 + 1, min(orig_h, y1))
                     cropped_arr = src_image.array[y0:y1, x0:x1, :].copy()
                     src_image = src_image.copy_with_new_array(cropped_arr)
-                except Exception:
-                    pass
+                    print(f"[DEBUG] _prepare_proxy(): crop完成，新尺寸={(x1-x0)}x{(y1-y0)}", flush=True)
+                except Exception as e:
+                    print(f"[ERROR] _prepare_proxy(): crop失败: {e}", flush=True)
             # 接触印相聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
             elif (self._active_crop_id is None and
                   self._contactsheet_profile.crop_rect is not None and
                   src_image.array is not None):
-                print("DEBUG: _prepare_proxy: 单张裁剪聚焦模式")
+                print("[DEBUG] _prepare_proxy(): 单张裁剪聚焦模式", flush=True)
                 try:
                     x, y, w, h = self._contactsheet_profile.crop_rect
                     x0 = int(round(x * orig_w))
@@ -1811,22 +1833,33 @@ class ApplicationContext(QObject):
                     y1 = max(y0 + 1, min(orig_h, y1))
                     cropped_arr = src_image.array[y0:y1, x0:x1, :].copy()
                     src_image = src_image.copy_with_new_array(cropped_arr)
-                except Exception:
-                    pass
+                    print(f"[DEBUG] _prepare_proxy(): contactsheet crop完成，新尺寸={(x1-x0)}x{(y1-y0)}", flush=True)
+                except Exception as e:
+                    print(f"[ERROR] _prepare_proxy(): contactsheet crop失败: {e}", flush=True)
+        else:
+            print("[DEBUG] _prepare_proxy(): Contactsheet模式（非聚焦），使用完整原图", flush=True)
 
         # 生成downsampled proxy（基于crop后的图像，或完整图像）
-        proxy = self.image_manager.generate_proxy(
-            src_image,
-            self.the_enlarger.preview_config.get_proxy_size_tuple()
-        )
+        print("[DEBUG] _prepare_proxy(): 开始生成proxy...", flush=True)
+        try:
+            proxy = self.image_manager.generate_proxy(
+                src_image,
+                self.the_enlarger.preview_config.get_proxy_size_tuple()
+            )
+            print(f"[DEBUG] _prepare_proxy(): proxy生成成功，尺寸={proxy.width}x{proxy.height}", flush=True)
+        except Exception as e:
+            print(f"[ERROR] _prepare_proxy(): proxy生成失败: {e}", flush=True)
+            return
 
         # 保存原图尺寸到metadata（供UI层使用）
         proxy.metadata['source_wh'] = (int(orig_w), int(orig_h))
 
         # 释放旧proxy并保存新proxy
         if self._current_proxy is not None:
+            print("[DEBUG] _prepare_proxy(): 释放旧proxy", flush=True)
             del self._current_proxy
         self._current_proxy = proxy
+        print("[DEBUG] _prepare_proxy() 执行完成，proxy已更新", flush=True)
 
     def get_current_idt_gamma(self) -> float:
         """读取当前输入色彩空间的IDT Gamma（无则返回1.0）。"""
@@ -1867,26 +1900,39 @@ class ApplicationContext(QObject):
 
     def _trigger_preview_update(self):
         """触发预览更新（根据配置选择进程或线程模式）"""
+        print("[DEBUG] _trigger_preview_update() 开始执行", flush=True)
+
         if not self._current_proxy:
+            print("[WARNING] _trigger_preview_update(): _current_proxy为None，提前返回", flush=True)
             return
 
         # 如果正在加载图片，延迟预览
         if self._loading_image:
+            print("[WARNING] _trigger_preview_update(): 正在加载图片（_loading_image=True），提前返回", flush=True)
             return
 
         # 根据配置选择模式
+        print(f"[DEBUG] _trigger_preview_update(): 使用{'进程' if self._use_process_isolation else '线程'}模式", flush=True)
         if self._use_process_isolation:
+            print("[DEBUG] _trigger_preview_update(): 调用_trigger_preview_with_process()", flush=True)
             self._trigger_preview_with_process()
         else:
+            print("[DEBUG] _trigger_preview_update(): 调用_trigger_preview_with_thread()", flush=True)
             self._trigger_preview_with_thread()
+        print("[DEBUG] _trigger_preview_update() 执行完成", flush=True)
 
     def _on_preview_result(self, result_image: ImageData):
+        print(f"[DEBUG] _on_preview_result(): 收到预览结果，尺寸={result_image.width}x{result_image.height}", flush=True)
+        print("[DEBUG] _on_preview_result(): 发射preview_updated信号", flush=True)
         self.preview_updated.emit(result_image)
+        print("[DEBUG] _on_preview_result(): preview_updated信号已发射", flush=True)
         # If an iterative auto color is in progress, trigger the next step
         if self._auto_color_iterations > 0 and self._get_preview_for_auto_color_callback:
+            print("[DEBUG] _on_preview_result(): 触发下一次auto_color迭代", flush=True)
             QTimer.singleShot(0, self._perform_auto_color_iteration)
         # If neutral point iteration is in progress, trigger the next step
         if self._neutral_point_iterations > 0 and self._neutral_point_callback:
+            print("[DEBUG] _on_preview_result(): 触发下一次neutral_point迭代", flush=True)
             QTimer.singleShot(0, self._perform_neutral_point_iteration)
 
 
@@ -1921,6 +1967,7 @@ class ApplicationContext(QObject):
         - 每个 worker 完成后立即释放其信号连接
         - 防止 worker 对象和其持有的大型数据（~17MB/worker）累积
         """
+        print("[DEBUG] _on_preview_finished(): Preview worker完成", flush=True)
         # 获取发出 finished 信号的 signals 对象（来自刚完成的 worker）
         sender_signals = self.sender()
 
@@ -1928,6 +1975,7 @@ class ApplicationContext(QObject):
         # 如果不断开，signals 对象会持有对 ApplicationContext 方法的引用，
         # 导致 worker 对象无法被 GC，其持有的图像副本也无法释放
         if sender_signals:
+            print("[DEBUG] _on_preview_finished(): 断开worker信号连接", flush=True)
             try:
                 # 为每个信号独立处理断开，确保即使某个失败也不影响其他
                 try:
@@ -1948,16 +1996,20 @@ class ApplicationContext(QObject):
 
             except Exception as e:
                 # 记录意外异常，但不中断预览流程
-                print(f"[WARNING] 清理 preview worker 信号连接时出错: {e}")
+                print(f"[WARNING] 清理 preview worker 信号连接时出错: {e}", flush=True)
 
         # 重置预览忙碌状态
+        print("[DEBUG] _on_preview_finished(): 重置busy标志", flush=True)
         self._preview_busy = False
 
         # 如果有 pending 的预览请求，触发它
         # 这确保了高频更新时的防抖机制正常工作
         if self._preview_pending:
+            print("[DEBUG] _on_preview_finished(): 有pending请求，触发preview更新", flush=True)
             self._preview_pending = False
             self._trigger_preview_update()
+        else:
+            print("[DEBUG] _on_preview_finished(): 没有pending请求", flush=True)
 
     # =================
     # 方向与旋转（UI调用）
@@ -1974,39 +2026,39 @@ class ApplicationContext(QObject):
     def set_orientation(self, degrees: int):
         """设置当前profile的orientation"""
         try:
-            print(f"[DEBUG] set_orientation() 开始执行, degrees={degrees}")
+            print(f"[DEBUG] set_orientation() 开始执行, degrees={degrees}", flush=True)
 
             deg = int(degrees) % 360
             # 规范到 0/90/180/270
             choices = [0, 90, 180, 270]
             normalized = min(choices, key=lambda x: abs(x - deg))
-            print(f"[DEBUG] set_orientation(): 规范化后的角度={normalized}, profile_kind={self._current_profile_kind}")
+            print(f"[DEBUG] set_orientation(): 规范化后的角度={normalized}, profile_kind={self._current_profile_kind}", flush=True)
 
             # 直接写入对应的数据源
             if self._current_profile_kind == 'contactsheet':
-                print(f"[DEBUG] set_orientation(): 设置contactsheet orientation={normalized}")
+                print(f"[DEBUG] set_orientation(): 设置contactsheet orientation={normalized}", flush=True)
                 self._contactsheet_profile.orientation = normalized
             elif self._active_crop_id:
                 crop = self.get_active_crop_instance()
-                print(f"[DEBUG] set_orientation(): crop模式, crop={'存在' if crop else '不存在'}")
+                print(f"[DEBUG] set_orientation(): crop模式, crop={'存在' if crop else '不存在'}", flush=True)
                 if crop:
-                    print(f"[DEBUG] set_orientation(): 设置crop orientation={normalized}")
+                    print(f"[DEBUG] set_orientation(): 设置crop orientation={normalized}", flush=True)
                     crop.orientation = normalized
 
             # 触发预览更新
             if self._current_image:
-                print("[DEBUG] set_orientation(): 准备proxy和触发预览更新")
+                print("[DEBUG] set_orientation(): 准备proxy和触发预览更新", flush=True)
                 self._prepare_proxy()
                 self._trigger_preview_update()
                 self._autosave_timer.start()
             else:
-                print("[WARNING] set_orientation(): 没有当前图像，跳过预览更新")
+                print("[WARNING] set_orientation(): 没有当前图像，跳过预览更新", flush=True)
 
-            print("[DEBUG] set_orientation() 执行完成")
+            print("[DEBUG] set_orientation() 执行完成", flush=True)
         except Exception as e:
             import traceback
             error_msg = f"设置orientation失败: {str(e)}\n{traceback.format_exc()}"
-            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] {error_msg}", flush=True)
             self.status_message_changed.emit(error_msg)
     
     def _ensure_ui_state_sync_for_monochrome(self):
@@ -2023,71 +2075,71 @@ class ApplicationContext(QObject):
         纯净的旋转逻辑：crop和全局orientation完全分离
         """
         try:
-            print(f"[DEBUG] rotate() 开始执行, direction={direction}")
+            print(f"[DEBUG] rotate() 开始执行, direction={direction}", flush=True)
 
             # 验证当前状态
             if not self._current_image:
-                print("[WARNING] rotate(): 没有当前图像，取消旋转操作")
+                print("[WARNING] rotate(): 没有当前图像，取消旋转操作", flush=True)
                 return
 
             step = 90 if int(direction) >= 0 else -90
-            print(f"[DEBUG] rotate(): step={step}, crop_focused={self._crop_focused}, profile_kind={self._current_profile_kind}")
+            print(f"[DEBUG] rotate(): step={step}, crop_focused={self._crop_focused}, profile_kind={self._current_profile_kind}", flush=True)
 
             if self._crop_focused or self._current_profile_kind == 'crop':
                 # 聚焦或裁剪Profile下：只旋转当前crop的orientation
                 crop_instance = self.get_active_crop_instance()
-                print(f"[DEBUG] rotate(): crop模式, crop_instance={'存在' if crop_instance else '不存在'}")
+                print(f"[DEBUG] rotate(): crop模式, crop_instance={'存在' if crop_instance else '不存在'}", flush=True)
                 if crop_instance:
                     old_orientation = crop_instance.orientation
                     new_orientation = (crop_instance.orientation + step) % 360
-                    print(f"[DEBUG] rotate(): 更新crop orientation: {old_orientation} -> {new_orientation}")
+                    print(f"[DEBUG] rotate(): 更新crop orientation: {old_orientation} -> {new_orientation}", flush=True)
                     # 仅更新当前裁剪的方向，保留其它裁剪
                     self.update_active_crop_orientation(new_orientation)
-                    print("[DEBUG] rotate(): 准备proxy...")
+                    print("[DEBUG] rotate(): 准备proxy...", flush=True)
                     self._prepare_proxy()
-                    print("[DEBUG] rotate(): 触发预览更新...")
+                    print("[DEBUG] rotate(): 触发预览更新...", flush=True)
                     self._trigger_preview_update()
-                    print("[DEBUG] rotate(): 启动自动保存计时器")
+                    print("[DEBUG] rotate(): 启动自动保存计时器", flush=True)
                     self._autosave_timer.start()
                 else:
-                    print("[WARNING] rotate(): crop模式下没有活动crop实例")
+                    print("[WARNING] rotate(): crop模式下没有活动crop实例", flush=True)
             else:
                 # 非聚焦状态：只旋转contactsheet orientation（不影响crop）
                 current_orientation = self.get_current_orientation()
                 new_deg = (current_orientation + step) % 360
-                print(f"[DEBUG] rotate(): contactsheet模式, orientation: {current_orientation} -> {new_deg}")
+                print(f"[DEBUG] rotate(): contactsheet模式, orientation: {current_orientation} -> {new_deg}", flush=True)
                 self.set_orientation(new_deg)
                 # 注意：不同步crop的orientation，保持完全分离
 
             # 发射旋转完成信号，让MainWindow知道需要fit to window
-            print("[DEBUG] rotate(): 发射rotation_completed信号")
+            print("[DEBUG] rotate(): 发射rotation_completed信号", flush=True)
             self.rotation_completed.emit()
-            print("[DEBUG] rotate() 执行完成")
+            print("[DEBUG] rotate() 执行完成", flush=True)
         except Exception as e:
             import traceback
             error_msg = f"旋转操作失败: {str(e)}\n{traceback.format_exc()}"
-            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] {error_msg}", flush=True)
             self.status_message_changed.emit(error_msg)
 
     def update_active_crop_orientation(self, orientation: int) -> None:
         """仅更新当前活跃裁剪的 orientation，保留所有裁剪与激活状态。"""
         try:
-            print(f"[DEBUG] update_active_crop_orientation() 开始执行, orientation={orientation}")
+            print(f"[DEBUG] update_active_crop_orientation() 开始执行, orientation={orientation}", flush=True)
 
             crop_instance = self.get_active_crop_instance()
             if crop_instance:
                 old_orientation = crop_instance.orientation
                 new_orientation = int(orientation) % 360
                 crop_instance.orientation = new_orientation
-                print(f"[DEBUG] update_active_crop_orientation(): 已更新 {old_orientation} -> {new_orientation}")
+                print(f"[DEBUG] update_active_crop_orientation(): 已更新 {old_orientation} -> {new_orientation}", flush=True)
             else:
-                print("[WARNING] update_active_crop_orientation(): 没有活动的crop实例")
+                print("[WARNING] update_active_crop_orientation(): 没有活动的crop实例", flush=True)
 
-            print("[DEBUG] update_active_crop_orientation() 执行完成")
+            print("[DEBUG] update_active_crop_orientation() 执行完成", flush=True)
         except Exception as e:
             import traceback
             error_msg = f"更新crop orientation失败: {str(e)}\n{traceback.format_exc()}"
-            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] {error_msg}", flush=True)
             self.status_message_changed.emit(error_msg)
 
     # ==== 单张裁剪：仅记录在 contactsheet，不创建正式 crop ====
@@ -2599,19 +2651,31 @@ class ApplicationContext(QObject):
 
     def _trigger_preview_with_thread(self):
         """使用线程模式触发预览（原有实现）"""
+        print("[DEBUG] _trigger_preview_with_thread() 开始执行", flush=True)
+
         if not self._current_proxy:
+            print("[WARNING] _trigger_preview_with_thread(): _current_proxy为None，提前返回", flush=True)
             return
 
         if self._preview_busy:
+            print(f"[WARNING] _trigger_preview_with_thread(): preview忙碌中，设置pending标志", flush=True)
             self._preview_pending = True
             return
 
+        print("[DEBUG] _trigger_preview_with_thread(): 设置busy标志，准备创建worker", flush=True)
         self._preview_busy = True
 
         # 使用 view() 和 shallow_copy() 避免深拷贝
-        proxy_view = self._current_proxy.view()
-        params_view = self._current_params.shallow_copy()
+        try:
+            proxy_view = self._current_proxy.view()
+            params_view = self._current_params.shallow_copy()
+            print(f"[DEBUG] _trigger_preview_with_thread(): proxy和params复制完成", flush=True)
+        except Exception as e:
+            print(f"[ERROR] _trigger_preview_with_thread(): 复制proxy/params失败: {e}", flush=True)
+            self._preview_busy = False
+            return
 
+        print("[DEBUG] _trigger_preview_with_thread(): 创建PreviewWorker...", flush=True)
         worker = _PreviewWorker(
             image=proxy_view,
             params=params_view,
@@ -2622,9 +2686,16 @@ class ApplicationContext(QObject):
         worker.signals.result.connect(self._on_preview_result)
         worker.signals.error.connect(self._on_preview_error)
         worker.signals.finished.connect(self._on_preview_finished)
+        print("[DEBUG] _trigger_preview_with_thread(): Worker创建完成，信号已连接", flush=True)
 
         # 使用 ensure_thread_pool() 统一处理线程池创建
-        self.ensure_thread_pool().start(worker)
+        print("[DEBUG] _trigger_preview_with_thread(): 提交worker到线程池", flush=True)
+        try:
+            self.ensure_thread_pool().start(worker)
+            print("[DEBUG] _trigger_preview_with_thread(): Worker已提交到线程池", flush=True)
+        except Exception as e:
+            print(f"[ERROR] _trigger_preview_with_thread(): 提交worker失败: {e}", flush=True)
+            self._preview_busy = False
 
     def _poll_preview_result(self):
         """定期轮询结果队列（~60 FPS）"""
