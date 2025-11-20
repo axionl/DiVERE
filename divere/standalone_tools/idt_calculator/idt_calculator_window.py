@@ -481,7 +481,7 @@ class IDTCalculatorWindow(QMainWindow):
                 "name": name,
                 "type": ["IDT"],
                 "primaries": colorspace_info['primaries'],
-                "white_point": colorspace_info['white_point'],
+                "white_point": [0.32168, 0.33767],#colorspace_info['white_point'],
                 "gamma": 1.0
             }
 

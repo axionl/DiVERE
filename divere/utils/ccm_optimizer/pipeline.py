@@ -61,6 +61,7 @@ class DiVEREPipelineSimulator:
             try:
                 space_info = self.color_space_manager.get_color_space_info(self.working_colorspace)
                 if space_info:
+
                     return space_info
                 else:
                     raise ValueError(f"找不到工作空间定义: {self.working_colorspace}")
@@ -118,7 +119,7 @@ class DiVEREPipelineSimulator:
     def simulate_full_pipeline(self, input_rgb_patches: Dict[str, Tuple[float, float, float]],
                               primaries_xy: np.ndarray,
                               white_point_xy: Optional[np.ndarray] = None,
-                              gamma: float = 2.6,
+                              gamma: float = 2.0,
                               dmax: float = 2.0,
                               r_gain: float = 0.0,
                               b_gain: float = 0.0,
@@ -151,13 +152,15 @@ class DiVEREPipelineSimulator:
         
         # 设置默认白点
         if white_point_xy is None:
-            white_point_xy = np.array([0.3127, 0.3290])  # D65
+            white_point_xy = np.array([0.32168, 0.33767])  # D60 很重要！Optimizer不优化白点。
         
         # 从primaries和white_point转换到当前工作空间
         # 获取当前工作空间的基色和白点定义
         ws_info = self._working_space_info
         working_primaries = ws_info['primaries']  # 已经是numpy数组格式
         working_white_point = np.array(ws_info['white_point'])
+        print(working_primaries)
+        print(working_white_point)
         
         # 计算转换矩阵
         input_to_xyz = self.primaries_to_xyz_matrix(primaries_xy, white_point_xy)
