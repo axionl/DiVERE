@@ -870,6 +870,7 @@ class ParameterPanel(QWidget):
             self.density_dmax_spinbox.setValue(params.density_dmax)
             # 同步dmax值到曲线编辑器的x轴
             self.curve_editor.curve_edit_widget.set_dmax(params.density_dmax)
+            self.curve_editor.curve_edit_widget.set_gamma(params.density_gamma)
 
             self.red_gain_slider.setValue(int(params.rgb_gains[0] * 1000))
             self.red_gain_spinbox.setValue(params.rgb_gains[0])
@@ -1428,6 +1429,8 @@ class ParameterPanel(QWidget):
         self.density_gamma_slider.blockSignals(True)
         self.density_gamma_slider.setValue(int(value * 1000))
         self.density_gamma_slider.blockSignals(False)
+        # 同步gamma值到曲线编辑器的x轴
+        self.curve_editor.curve_edit_widget.set_gamma(value)
         self.parameter_changed.emit()
 
     def _on_dmax_slider_changed(self, value: int):

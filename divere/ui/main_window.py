@@ -575,7 +575,8 @@ class MainWindow(QMainWindow):
         
         preset_file_path = self.context.auto_preset_manager.get_current_preset_file_path()
         if preset_file_path:
-            self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
+            pass
+            # self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
 
     def _on_curves_config_reloaded(self):
         """响应curves配置重载信号"""

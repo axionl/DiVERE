@@ -460,7 +460,7 @@ class ImageManager:
         #     return image
         
         # 处理单/双通道图像转换为3通道用于pipeline兼容
-        source_array = image.array.copy()
+        source_array = image.array#.copy()
         if image.is_monochrome_source and image.array is not None:
             if image.array.ndim == 2:
                 # 2D灰度图像 → 3通道
@@ -485,7 +485,7 @@ class ImageManager:
         scale_w = max_w / w
         scale_h = max_h / h
         scale = min(scale_w, scale_h, 1.0)  # 不放大图像
-        
+
         if scale >= 1.0:
             # 图像已经足够小，但仍需要通道转换
             proxy_array = source_array
@@ -493,14 +493,16 @@ class ImageManager:
             # 计算新的尺寸
             new_w = int(w * scale)
             new_h = int(h * scale)
-            
+
             # 使用OpenCV进行高质量缩放
             proxy_array = cv2.resize(
                 source_array, 
                 (new_w, new_h), 
                 interpolation=cv2.INTER_LINEAR
             )
-        
+        # 落到float16
+        proxy_array = proxy_array.astype(np.float16, copy=False)
+
         # 创建代理ImageData
         proxy_data = ImageData(
             array=proxy_array,
@@ -513,7 +515,7 @@ class ImageManager:
             original_channels=image.original_channels,
             is_monochrome_source=image.is_monochrome_source
         )
-        
+
         return proxy_data
     
     def get_cached_proxy(self, image_id: str) -> Optional[ImageData]:

@@ -396,9 +396,9 @@ class CurveEditWidget(QWidget):
         
         # 垂直网格线（对应X轴密度值）
         # X轴是固定宽度的滑动窗口：左边界 = dmax - 4.816，右边界 = dmax
-        x_density_range = np.log10(65536)  # ≈ 4.816，固定窗口宽度
-        x_density_min = self.dmax - x_density_range
-        x_density_max = self.dmax
+        x_density_range = np.log10(65536) / self.gamma
+        x_density_min = 0.7 + (self.dmax - 0.7) / self.gamma - x_density_range
+        x_density_max = 0.7 + (self.dmax - 0.7) / self.gamma
         x_density_step = 0.3
 
         # 找到窗口范围内的第一个和最后一个0.3倍数
@@ -487,9 +487,12 @@ class CurveEditWidget(QWidget):
 
         # 绘制X轴标签（密度值）
         # 使用与网格线相同的滑动窗口范围
-        x_density_range = np.log10(65536)  # ≈ 4.816，固定窗口宽度
-        x_density_min = self.dmax - x_density_range
-        x_density_max = self.dmax
+        # adjusted_density = 0.7 + (original_density - 0.7) * gamma - dmax
+        x_density_range = np.log10(65536)/ self.gamma
+        x_density_min = 0.7 + (self.dmax - 0.7) / self.gamma - x_density_range
+        x_density_max = 0.7 + (self.dmax - 0.7) / self.gamma
+        print(f"density_max = {x_density_min}")
+        print(f"density_max = {x_density_max}")
         x_density_step = 0.3
 
         # 找到窗口范围内的第一个和最后一个0.3倍数
