@@ -787,11 +787,7 @@ class MainWindow(QMainWindow):
                         return
 
             self.context.load_preset(preset)
-            
-            # 如果有图像，触发预览更新
-            if current_image:
-                self.context._prepare_proxy()
-                self.context._trigger_preview_update()
+            # load_preset内部会自动触发预览更新，无需重复调用
 
         except (IOError, ValueError, FileNotFoundError) as e:
             QMessageBox.critical(self, "加载预设失败", str(e))

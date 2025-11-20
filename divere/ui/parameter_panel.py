@@ -1624,9 +1624,8 @@ class ParameterPanel(QWidget):
             # 检查是否修改，并添加星号标记
             if self._is_idt_modified():
                 self._mark_as_modified(self.input_colorspace_combo)
-            
-            # 触发Context按当前色彩空间重建proxy（内部会skip逆伽马，并应用前置幂次）
-            self.context._prepare_proxy()
+
+            # IDT gamma修改只需要触发预览更新，不需要prepare_proxy（worker会处理）
             self.context._trigger_preview_update()
         except Exception:
             pass

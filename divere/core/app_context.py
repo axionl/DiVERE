@@ -604,8 +604,7 @@ class ApplicationContext(QObject):
             self._active_crop_id = crop_id
             # 初始化该裁剪的参数集（shallow_copy contactsheet）
             self._per_crop_params[crop_id] = self._contactsheet_profile.params.shallow_copy()  # 优化：只读初始化，使用 shallow_copy()
-            # 切到该裁剪 Profile（不聚焦）
-            self.switch_to_crop(crop_id)
+            # 添加crop不切换profile，保持在contactsheet（避免不必要的prepare_proxy）
             # 发信号
             self.crop_changed.emit(crop.rect_norm)
             self._autosave_timer.start()
@@ -657,10 +656,13 @@ class ApplicationContext(QObject):
             # 维护 active id
             if self._active_crop_id == crop_id:
                 self._active_crop_id = kept[0].id if kept else None
-            # 退出聚焦
+            # 退出聚焦（只有之前在聚焦状态才需要prepare_proxy）
+            was_focused = self._crop_focused
             self._crop_focused = False
-            # 触发预览刷新
-            self._prepare_proxy(); self._trigger_preview_update()
+            # 触发预览刷新（只有从聚焦状态退出才需要prepare_proxy）
+            if was_focused:
+                self._prepare_proxy()
+            self._trigger_preview_update()
             # 发裁剪变化信号（传当前active或None）
             try:
                 active_rect = self.get_active_crop()
@@ -699,7 +701,7 @@ class ApplicationContext(QObject):
                 self._current_params = cs_params.shallow_copy()  # 优化：只读加载，使用 shallow_copy()
                 self.params_changed.emit(self._current_params)
                 print("DEBUG: params_changed信号已发射")
-                self._prepare_proxy(); self._trigger_preview_update()
+                self._trigger_preview_update()  # 只是参数复制，不需要prepare_proxy
                 print("DEBUG: 预览更新已触发")
             else:
                 print("DEBUG: 当前未处于crop聚焦状态")
@@ -747,7 +749,7 @@ class ApplicationContext(QObject):
                 self._current_params = crop_params.shallow_copy()  # 优化：只读加载，使用 shallow_copy()
                 self.params_changed.emit(self._current_params)
                 print("DEBUG: params_changed信号已发射")
-                self._prepare_proxy(); self._trigger_preview_update()
+                self._trigger_preview_update()  # 只是参数复制，不需要prepare_proxy
                 print("DEBUG: 预览更新已触发")
             else:
                 print("DEBUG: 当前未处于contactsheet模式")
@@ -1081,11 +1083,8 @@ class ApplicationContext(QObject):
             self._contactsheet_profile.orientation = preset.orientation
         except Exception:
             pass
-        
-        # 确保在更新参数前先准备好proxy，避免使用旧proxy导致预览暗淡
-        if self._current_image:
-            print("[DEBUG: load_preset]")
-            self._prepare_proxy()
+
+        # 加载预设只是参数修改，不需要prepare_proxy（worker会处理）
 
         self.update_params(new_params)
         self._contactsheet_profile.params = self._current_params.shallow_copy()  # 优化：只读保存，使用 shallow_copy()
@@ -1214,7 +1213,7 @@ class ApplicationContext(QObject):
             self._active_crop_id = bundle.active_crop_id
             self._crop_focused = False
             self._current_profile_kind = 'contactsheet'
-            self._prepare_proxy(); self._trigger_preview_update()
+            # 加载bundle不需要prepare_proxy，调用方（如load_image）会处理
         except Exception as e:
             print(f"加载Bundle失败: {e}")
 
@@ -1335,8 +1334,7 @@ class ApplicationContext(QObject):
         # 触发参数更新和预览刷新
         self.params_changed.emit(self._current_params)
         if self._current_image and not getattr(self, '_loading_image', False):
-            self._prepare_proxy()
-            self._trigger_preview_update()
+            self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
     
     def convert_to_black_and_white_mode(self, show_dialog: bool = True):
         """
@@ -1368,9 +1366,8 @@ class ApplicationContext(QObject):
         # Update the UI and trigger preview refresh
         self.params_changed.emit(self._current_params)
         if self._current_image:
-            self._prepare_proxy()
-            self._trigger_preview_update()
-        
+            self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
+
         self.status_message_changed.emit(f"已转换为黑白模式: {self.film_type_controller.get_film_type_display_name(new_film_type)}")
     
     def get_current_film_type(self) -> str:
@@ -1450,10 +1447,9 @@ class ApplicationContext(QObject):
         
         # 恢复保存的orientation
         self._contactsheet_profile.orientation = saved_orientation
-        
-        # 重新更新预览，确保使用正确的orientation
+
+        # 重新更新预览（只是参数修改，不需要prepare_proxy）
         if self._current_image:
-            self._prepare_proxy()
             self._trigger_preview_update()
 
     def set_current_as_folder_default(self):
@@ -2090,10 +2086,9 @@ class ApplicationContext(QObject):
                     print(f"[DEBUG] set_orientation(): 设置crop orientation={normalized}", flush=True)
                     crop.orientation = normalized
 
-            # 触发预览更新
+            # 触发预览更新（orientation在worker中处理，不需要prepare_proxy）
             if self._current_image:
-                print("[DEBUG] set_orientation(): 准备proxy和触发预览更新", flush=True)
-                self._prepare_proxy()
+                print("[DEBUG] set_orientation(): 触发预览更新", flush=True)
                 self._trigger_preview_update()
                 self._autosave_timer.start()
             else:
@@ -2140,9 +2135,7 @@ class ApplicationContext(QObject):
                     print(f"[DEBUG] rotate(): 更新crop orientation: {old_orientation} -> {new_orientation}", flush=True)
                     # 仅更新当前裁剪的方向，保留其它裁剪
                     self.update_active_crop_orientation(new_orientation)
-                    print("[DEBUG] rotate(): 准备proxy...", flush=True)
-                    self._prepare_proxy()
-                    print("[DEBUG] rotate(): 触发预览更新...", flush=True)
+                    print("[DEBUG] rotate(): 触发预览更新（orientation在worker中处理）...", flush=True)
                     self._trigger_preview_update()
                     print("[DEBUG] rotate(): 启动自动保存计时器", flush=True)
                     self._autosave_timer.start()

@@ -431,7 +431,6 @@ class PreviewWorkerProcess:
                         rss_kb = int(result.stdout.strip())
                         mem_mb = rss_kb / 1024
 
-                        #
                         return mem_mb
                     else:
                         logger.debug(f"ps command failed: {result.stderr}")
