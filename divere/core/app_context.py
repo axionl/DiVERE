@@ -1979,7 +1979,7 @@ class ApplicationContext(QObject):
                 print("[DEBUG] _on_preview_result(): 触发下一次neutral_point迭代", flush=True)
                 QTimer.singleShot(0, self._perform_neutral_point_iteration)
         else:
-            pass #print("[ERROR] _on_preview_result(): result_image is None")
+            pass # print("[ERROR] _on_preview_result(): result_image is None")
 
 
     def _on_preview_error(self, message: str):
