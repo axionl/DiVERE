@@ -1965,18 +1965,21 @@ class ApplicationContext(QObject):
         print("[DEBUG] _trigger_preview_update() 执行完成", flush=True)
 
     def _on_preview_result(self, result_image: ImageData):
-        print(f"[DEBUG] _on_preview_result(): 收到预览结果，尺寸={result_image.width}x{result_image.height}", flush=True)
-        print("[DEBUG] _on_preview_result(): 发射preview_updated信号", flush=True)
-        self.preview_updated.emit(result_image)
-        print("[DEBUG] _on_preview_result(): preview_updated信号已发射", flush=True)
-        # If an iterative auto color is in progress, trigger the next step
-        if self._auto_color_iterations > 0 and self._get_preview_for_auto_color_callback:
-            print("[DEBUG] _on_preview_result(): 触发下一次auto_color迭代", flush=True)
-            QTimer.singleShot(0, self._perform_auto_color_iteration)
-        # If neutral point iteration is in progress, trigger the next step
-        if self._neutral_point_iterations > 0 and self._neutral_point_callback:
-            print("[DEBUG] _on_preview_result(): 触发下一次neutral_point迭代", flush=True)
-            QTimer.singleShot(0, self._perform_neutral_point_iteration)
+        if result_image is not None:
+            print(f"[DEBUG] _on_preview_result(): 收到预览结果，尺寸={result_image.width}x{result_image.height}", flush=True)
+            print("[DEBUG] _on_preview_result(): 发射preview_updated信号", flush=True)
+            self.preview_updated.emit(result_image)
+            print("[DEBUG] _on_preview_result(): preview_updated信号已发射", flush=True)
+            # If an iterative auto color is in progress, trigger the next step
+            if self._auto_color_iterations > 0 and self._get_preview_for_auto_color_callback:
+                print("[DEBUG] _on_preview_result(): 触发下一次auto_color迭代", flush=True)
+                QTimer.singleShot(0, self._perform_auto_color_iteration)
+            # If neutral point iteration is in progress, trigger the next step
+            if self._neutral_point_iterations > 0 and self._neutral_point_callback:
+                print("[DEBUG] _on_preview_result(): 触发下一次neutral_point迭代", flush=True)
+                QTimer.singleShot(0, self._perform_neutral_point_iteration)
+        else:
+            pass #print("[ERROR] _on_preview_result(): result_image is None")
 
 
     def _on_preview_error(self, message: str):
@@ -2731,6 +2734,12 @@ class ApplicationContext(QObject):
         if not self._current_proxy:
             return
 
+        # 进程模式也用 busy/pending
+        if self._preview_busy:
+            self._preview_pending = True
+            return
+        self._preview_busy = True
+
         # Lazy 创建或热重载 worker 进程
         if self._preview_worker_process is None:
             # 首次创建 worker 进程
@@ -2863,6 +2872,19 @@ class ApplicationContext(QObject):
             else:
                 # 正常结果
                 self._on_preview_result(result)
+
+        # 不管是正常还是异常，这一轮 preview 算是结束了
+        self._preview_busy = False
+
+        if isinstance(result, Exception):
+            self._on_preview_error(str(result))
+        else:
+            self._on_preview_result(result)
+
+        # 看看有没有 pending 的请求
+        if self._preview_pending:
+            self._preview_pending = False
+            self._trigger_preview_update()
 
     def _atexit_cleanup(self):
         """程序退出时的清理函数（atexit handler）
