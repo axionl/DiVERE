@@ -433,18 +433,18 @@ class ApplicationContext(QObject):
         if self.get_active_crop() is None or not self._current_image:
             return
         self._crop_focused = True
-        self._prepare_proxy()
+        print("[DEBUG] Call for _prepare_proxy: focus_on_active_crop()"); self._prepare_proxy()
         # 模式切换后，worker 会在预览时自动 reload proxy（热重载）
-        self._trigger_preview_update()
+        print("[DEBUG] Trigger for preview_update: focus_on_active_crop()"); self._trigger_preview_update()
         self._autosave_timer.start()
 
     def restore_crop_preview(self) -> None:
         if not self._current_image:
             return
         self._crop_focused = False
-        self._prepare_proxy()
+        print("[DEBUG] Call for _prepare_proxy: restore_crop_preview()"); self._prepare_proxy()
         # 模式切换后，worker 会在预览时自动 reload proxy（热重载）
-        self._trigger_preview_update()
+        print("[DEBUG] Trigger for preview_update: restore_crop_preview()");self._trigger_preview_update()
         self._autosave_timer.start()
 
     def focus_on_contactsheet_crop(self) -> None:
@@ -457,7 +457,7 @@ class ApplicationContext(QObject):
             if self._contactsheet_profile.crop_rect is None:
                 return
             self._crop_focused = True
-            self._prepare_proxy()
+            print("[DEBUG] Call for _prepare_proxy: focus_on_contactsheet_crop()"); self._prepare_proxy()
             # 模式切换后，worker 会在预览时自动 reload proxy（热重载）
             self._trigger_preview_update()
             self._autosave_timer.start()
@@ -477,6 +477,7 @@ class ApplicationContext(QObject):
             # 移除orientation同步 - UI将直接读取contactsheet的orientation
             # 发送参数变更信号
             self.params_changed.emit(self._current_params)
+            print("[DEBUG] Call for _prepare_proxy: switch_to_contactsheet()")
             self._prepare_proxy(); self._trigger_preview_update()
         except Exception:
             pass
@@ -496,6 +497,7 @@ class ApplicationContext(QObject):
             # 移除orientation同步 - UI将直接读取crop的orientation
             # 发送参数变更信号
             self.params_changed.emit(self._current_params)
+            print("[DEBUG] Call for _prepare_proxy: switch_to_crop()")
             self._prepare_proxy(); self._trigger_preview_update()
         except Exception:
             pass
@@ -528,7 +530,7 @@ class ApplicationContext(QObject):
             self._crop_focused = True
             # 一次性刷新
             self.params_changed.emit(self._current_params)
-            self._prepare_proxy()
+            print("[DEBUG] Call for _prepare_proxy: switch_to_crop_focused()"); self._prepare_proxy()
             # 模式切换后，worker 会在预览时自动 reload proxy（热重载）
             self._trigger_preview_update()
             self._autosave_timer.start()
@@ -625,7 +627,7 @@ class ApplicationContext(QObject):
                 self.crop_changed.emit(crop_instance.rect_norm)
                 # 如果当前处于聚焦状态，需要重新准备proxy
                 if self._crop_focused:
-                    self._prepare_proxy()
+                    print("[DEBUG] Call for _prepare_proxy: update_active_crop()"); self._prepare_proxy()
                     # Crop rect调整后，worker 会在预览时自动 reload proxy（热重载）
                     self._trigger_preview_update()
                 self._autosave_timer.start()
@@ -661,7 +663,7 @@ class ApplicationContext(QObject):
             self._crop_focused = False
             # 触发预览刷新（只有从聚焦状态退出才需要prepare_proxy）
             if was_focused:
-                self._prepare_proxy()
+                print("[DEBUG] Call for _prepare_proxy: delete_crop()"); self._prepare_proxy()
             self._trigger_preview_update()
             # 发裁剪变化信号（传当前active或None）
             try:
@@ -949,7 +951,7 @@ class ApplicationContext(QObject):
             self._loading_image = False
             if self._current_image:
                 print(f"[DEBUG] load_image(): 调用_prepare_proxy()...", flush=True)
-                self._prepare_proxy()
+                print("[DEBUG] Call for _prepare_proxy: load_image()"); self._prepare_proxy()
                 print(f"[DEBUG] load_image(): 调用_trigger_preview_update()...", flush=True)
                 self._trigger_preview_update()
 
@@ -1334,7 +1336,7 @@ class ApplicationContext(QObject):
         # 触发参数更新和预览刷新
         self.params_changed.emit(self._current_params)
         if self._current_image and not getattr(self, '_loading_image', False):
-            self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
+            print("[DEBUG] Trigger for preview_update: set_current_film_type()"); self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
     
     def convert_to_black_and_white_mode(self, show_dialog: bool = True):
         """
@@ -1366,7 +1368,7 @@ class ApplicationContext(QObject):
         # Update the UI and trigger preview refresh
         self.params_changed.emit(self._current_params)
         if self._current_image:
-            self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
+            print("[DEBUG] Trigger for preview_update: convert_to_black_and_white_mode()"); self._trigger_preview_update()  # 只是参数修改，不需要prepare_proxy
 
         self.status_message_changed.emit(f"已转换为黑白模式: {self.film_type_controller.get_film_type_display_name(new_film_type)}")
     
@@ -2781,6 +2783,7 @@ class ApplicationContext(QObject):
                 custom_colorspace_def['name'] = cs_name
 
         # 发送预览请求（非阻塞），传递完整的proxy准备参数和显示状态
+        print("[DEBUG] _trigger_preview_with_process: 发送预览请求（非阻塞）")
         self._preview_worker_process.request_preview(
             self._current_params,
             crop_rect_norm=crop_rect_norm,  # 始终为None
@@ -2846,6 +2849,7 @@ class ApplicationContext(QObject):
 
     def _poll_preview_result(self):
         """定期轮询结果队列（~60 FPS）"""
+        # print("[DEBUG] _poll_preview_result: 轮询结果定时触发")
         if self._preview_worker_process is None:
             self._result_poll_timer.stop()
             return

@@ -513,7 +513,7 @@ class FilmPipelineProcessor:
         
         if self._profiling_enabled:
             self._print_full_precision_profile(profile)
-        
+
         return image.copy_with_new_array(working_array)
     
     # =======================

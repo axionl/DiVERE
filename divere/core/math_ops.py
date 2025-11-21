@@ -116,6 +116,7 @@ class FilmMathOps:
             use_parallel: 是否并行（大图有效）
         """
         if image_array is None or image_array.size == 0:
+            print("[ERROR]: apply_power(): image_array is None")
             return image_array
         exp_f = float(exponent)
         if abs(exp_f - 1.0) < 1e-6:
@@ -160,6 +161,18 @@ class FilmMathOps:
                     rgb = result[:, :, :3]
                     rgb = np.clip(rgb, 0.0, 1.0)
                     indices = np.round(rgb * (lut_size - 1)).astype(np.uint16)
+                    # 调试：检测有没有越界
+                    bad = (indices < 0) | (indices >= lut_size)
+                    if bad.any():
+                        print(
+                            "[WARN] apply_power: LUT index out of range, "
+                            f"min={indices.min()}, max={indices.max()}, "
+                            f"exponent={exp_f}, num_bad={bad.sum()}",
+                            flush=True
+                        )
+                        # 强制裁剪，防止 np.take 抛异常
+                        indices = np.clip(indices, 0, lut_size - 1)
+
                     rgb_out = np.take(lut, indices)
                     result[:, :, :3] = rgb_out.astype(result.dtype)
                 return result
@@ -1466,6 +1479,10 @@ class FilmMathOps:
         Returns:
             处理后的图像数组
         """
+        if image_array is None:
+            # 你可以选择直接返回 None，或者抛一个更清晰的异常
+            raise ValueError("apply_full_math_pipeline() got image_array=None")
+
         if profile is not None:
             profile.clear()
 

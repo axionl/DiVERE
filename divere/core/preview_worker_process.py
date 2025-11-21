@@ -114,9 +114,9 @@ def _worker_main_loop(
 
                     # 重新加载 proxy
                     proxy_image = _load_proxy_from_shm(new_shm_name, new_shape, new_dtype)
-
                     queue_result.put({'status': 'proxy_reloaded'})
                 except Exception as e:
+                    print("worker_main_loop error!!")
                     queue_result.put({
                         'status': 'error',
                         'message': f"Failed to reload proxy: {e}",

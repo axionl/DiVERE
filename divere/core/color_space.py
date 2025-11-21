@@ -622,7 +622,6 @@ class ColorSpaceManager:
                 color_space = load_default_preset().input_transformation.name or "KodakEnduraPremier"
             except Exception:
                 color_space = "KodakEnduraPremier"
-        
         # 创建新的图像数据对象，更新色彩空间信息
         new_image = ImageData(
             array=image.array.copy(),
@@ -762,7 +761,7 @@ class ColorSpaceManager:
         """应用色彩矩阵变换和增益校正"""
         # 重塑图像为2D数组以便矩阵乘法
         original_shape = image_array.shape
-        
+
         # 处理单通道图像
         if len(original_shape) == 2:
             # 2D灰度图像，复制为3通道处理
