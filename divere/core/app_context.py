@@ -2367,8 +2367,27 @@ class ApplicationContext(QObject):
             self._loading_image = backup.get('loading_image', False)
             self._preview_busy = backup.get('preview_busy', False)
             self._preview_pending = backup.get('preview_pending', False)
-            
+
             print("Context状态已恢复")
+
+            # 状态恢复后触发预览更新，确保UI显示正确
+            # 修复：导出crops后preview显示错误的bug
+
+            # 强制清除加载标志，允许预览更新
+            # 修复：恢复状态后preview被永久锁定的bug
+            # 原因：backup可能包含_loading_image=True，恢复后会阻止所有预览更新
+            self._loading_image = False
+
+            if self._use_process_isolation:
+                # 进程模式：标记proxy需要重载到worker
+                self._proxy_needs_reload = True
+
+            # 发送参数变更信号，更新UI参数面板
+            if self._current_params:
+                self.params_changed.emit(self._current_params)
+
+            # 触发预览更新，刷新PreviewWidget显示
+            self._trigger_preview_update()
 
         except Exception as e:
             print(f"恢复状态失败: {e}")
@@ -2696,18 +2715,13 @@ class ApplicationContext(QObject):
 
         try:
             from multiprocessing import shared_memory
+            import time
+            import threading
 
             proxy = self._current_proxy
 
-            # 1. 清理旧的 shared memory
-            if self._proxy_shared_memory is not None:
-                try:
-                    self._proxy_shared_memory.close()
-                    self._proxy_shared_memory.unlink()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to cleanup old shared memory: {e}")
+            # 1. 保存旧的 shared memory 引用（延迟删除）
+            old_shm = self._proxy_shared_memory
 
             # 2. 创建新的 shared memory 并写入新 proxy
             shm = shared_memory.SharedMemory(create=True, size=proxy.array.nbytes)
@@ -2729,6 +2743,24 @@ class ApplicationContext(QObject):
             self._proxy_needs_reload = False
 
             print(f"[WORKER] Reloaded proxy via hot-reload (shape={proxy.array.shape})")
+
+            # 6. 延迟删除旧的 shared memory（给 worker 足够时间关闭旧引用）
+            # 这个延迟很小（50ms），不会影响用户体验，但能显著降低竞态条件风险
+            if old_shm is not None:
+                def cleanup_old_shm():
+                    """后台清理旧 shared memory"""
+                    time.sleep(0.05)  # 50ms 延迟
+                    try:
+                        old_shm.close()
+                        old_shm.unlink()
+                    except Exception as e:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.debug(f"Failed to cleanup old shared memory (may already be closed): {e}")
+
+                # 使用后台线程清理（避免阻塞主线程）
+                cleanup_thread = threading.Thread(target=cleanup_old_shm, daemon=True)
+                cleanup_thread.start()
 
         except Exception as e:
             import logging

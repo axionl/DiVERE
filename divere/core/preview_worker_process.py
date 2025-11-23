@@ -39,20 +39,39 @@ def _load_proxy_from_shm(shm_name: str, shape: tuple, dtype: str):
 
     Returns:
         ImageData: proxy 图像
+
+    Raises:
+        FileNotFoundError: 当 shared memory 不存在时（可能已被删除）
     """
     from divere.core.data_types import ImageData
 
-    shm = shared_memory.SharedMemory(name=shm_name)
-    proxy_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+    try:
+        shm = shared_memory.SharedMemory(name=shm_name)
+    except FileNotFoundError as e:
+        # Shared memory 已被删除（可能是快速切换图片导致的竞态条件）
+        logger.warning(f"Shared memory '{shm_name}' not found (may have been deleted by main process)")
+        raise FileNotFoundError(
+            f"Shared memory '{shm_name}' not found. "
+            f"This is likely due to rapid image switching. "
+            f"The request will be skipped."
+        ) from e
 
-    # 拷贝到 worker 进程内存（避免依赖主进程的 shm）
-    proxy_image = ImageData(
-        array=proxy_array.copy(),
-        metadata={},
-    )
+    try:
+        proxy_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
 
-    shm.close()  # 不 unlink，主进程负责清理
-    return proxy_image
+        # 拷贝到 worker 进程内存（避免依赖主进程的 shm）
+        proxy_image = ImageData(
+            array=proxy_array.copy(),
+            metadata={},
+        )
+
+        return proxy_image
+    finally:
+        # 确保 shared memory 被关闭（即使出错）
+        try:
+            shm.close()  # 不 unlink，主进程负责清理
+        except:
+            pass
 
 
 def _worker_main_loop(
@@ -115,8 +134,17 @@ def _worker_main_loop(
                     # 重新加载 proxy
                     proxy_image = _load_proxy_from_shm(new_shm_name, new_shape, new_dtype)
                     queue_result.put({'status': 'proxy_reloaded'})
+                except FileNotFoundError as e:
+                    # Shared memory 不存在（已被删除）—— 这是快速切换图片时的正常情况
+                    # 跳过这个过时的请求，不报错给用户（避免干扰体验）
+                    logger.info(f"Skipping stale reload_proxy request: {e}")
+                    queue_result.put({
+                        'status': 'proxy_reload_skipped',
+                        'message': 'Stale reload request skipped (shared memory already deleted)'
+                    })
                 except Exception as e:
-                    print("worker_main_loop error!!")
+                    # 其他错误（真正的问题）
+                    logger.error(f"Failed to reload proxy: {e}")
                     queue_result.put({
                         'status': 'error',
                         'message': f"Failed to reload proxy: {e}",
@@ -378,7 +406,29 @@ class PreviewWorkerProcess:
         self.proxy_shape = proxy_shape
         self.proxy_dtype = proxy_dtype
 
-        # 发送 reload_proxy 请求
+        # 清空旧的 reload_proxy 请求（只保留最新的）
+        # 这是关键修复：防止快速切换图片时旧请求引用已删除的 shared memory
+        cleared_count = 0
+        while not self.queue_request.empty():
+            try:
+                old_request = self.queue_request.get_nowait()
+                # 只清理 reload_proxy 请求，保留其他类型请求（如 preview）
+                if old_request and old_request.get('action') == 'reload_proxy':
+                    cleared_count += 1
+                else:
+                    # 不是 reload_proxy 请求，放回队列
+                    try:
+                        self.queue_request.put_nowait(old_request)
+                    except queue.Full:
+                        logger.warning("Queue full when putting back non-reload request")
+                        break
+            except queue.Empty:
+                break
+
+        if cleared_count > 0:
+            logger.info(f"Cleared {cleared_count} old reload_proxy request(s) from queue")
+
+        # 发送新的 reload_proxy 请求
         request_dict = {
             'action': 'reload_proxy',
             'proxy_shm_name': proxy_shm_name,
@@ -390,6 +440,12 @@ class PreviewWorkerProcess:
             self.queue_request.put(request_dict, timeout=1.0)
         except queue.Full:
             logger.warning("Request queue full, cannot reload proxy")
+            # 再次尝试清空并发送
+            try:
+                self.queue_request.get_nowait()
+                self.queue_request.put(request_dict, timeout=0.1)
+            except:
+                pass
 
     def get_memory_usage(self) -> Optional[float]:
         """获取 worker 进程内存使用量（MB）
@@ -587,8 +643,9 @@ class PreviewWorkerProcess:
             return Exception(result_info['message'])
 
         # 过滤内部消息（不是预览结果）
-        if result_info['status'] in ('proxy_reloaded', 'memory_info'):
+        if result_info['status'] in ('proxy_reloaded', 'proxy_reload_skipped', 'memory_info'):
             # 内部状态消息，忽略并继续等待预览结果
+            # proxy_reload_skipped: 过时的 reload 请求被跳过（快速切换图片时的正常情况）
             return None
 
         # 预览结果必须包含 'shm_name'
