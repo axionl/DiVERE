@@ -4,7 +4,7 @@
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
    crs:PresetType="Normal"
    crs:Cluster=""
-   crs:UUID="6674AF88A45848C7995CFC5B72CF2340"
+   crs:UUID="0EC8AB31D7884539A7D65AE13921F094"
    crs:SupportsAmount2="True"
    crs:SupportsAmount="True"
    crs:SupportsColor="True"
@@ -54,7 +54,7 @@
    </crs:SortName>
    <crs:Group>
     <rdf:Alt>
-     <rdf:li xml:lang="x-default">DiVERE Density Curves</rdf:li>
+     <rdf:li xml:lang="x-default">DiVERE Density Curves HDR</rdf:li>
     </rdf:Alt>
    </crs:Group>
    <crs:Description>
