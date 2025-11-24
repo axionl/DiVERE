@@ -101,18 +101,23 @@ class FolderNavigator(QObject):
             return self._file_list[self._current_index]
         return None
     
-    def navigate_to_index(self, index: int):
-        """跳转到指定索引的文件"""
+    def navigate_to_index(self, index: int, force_reload: bool = False):
+        """跳转到指定索引的文件
+
+        Args:
+            index: 文件索引
+            force_reload: 强制重新加载，即使已经是当前文件
+        """
         if not (0 <= index < len(self._file_list)):
             return
-        
-        if index == self._current_index:
-            return  # 已经是当前文件
-        
+
+        if index == self._current_index and not force_reload:
+            return  # 已经是当前文件且不强制重新加载
+
         self._current_index = index
         filename = self._file_list[index]
         file_path = os.path.join(self._current_folder, filename)
-        
+
         # 发射信号通知文件变化
         self.file_changed.emit(file_path)
     

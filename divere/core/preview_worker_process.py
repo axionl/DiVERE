@@ -106,7 +106,27 @@ def _worker_main_loop(
         color_space_manager = ColorSpaceManager()
 
         # ============ Step 2: 加载 proxy 从 shared memory ============
-        proxy_image = _load_proxy_from_shm(proxy_shm_name, proxy_shape, proxy_dtype)
+        # 增加容错和重试机制：快速切换图片时，初始 proxy 可能已被删除
+        proxy_image = None
+        max_retries = 2
+        retry_delay = 0.1  # 100ms
+
+        for attempt in range(max_retries):
+            try:
+                proxy_image = _load_proxy_from_shm(proxy_shm_name, proxy_shape, proxy_dtype)
+                break  # 加载成功，退出重试循环
+            except FileNotFoundError as e:
+                if attempt < max_retries - 1:
+                    # 还有重试机会，等待后重试
+                    logger.info(f"Initial proxy not found (attempt {attempt + 1}/{max_retries}), retrying after {retry_delay}s...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    # 最后一次尝试也失败，进入优雅降级模式
+                    logger.warning(f"Initial proxy not found after {max_retries} attempts. "
+                                   f"Worker will wait for reload_proxy request. "
+                                   f"This is normal during rapid image switching.")
+                    # proxy_image 保持为 None，等待 reload_proxy 请求
 
         # ============ Step 3: 主循环：处理预览请求 ============
         while True:
@@ -179,6 +199,16 @@ def _worker_main_loop(
             # === 处理 preview 请求 ===
             if action != 'preview':
                 # 未知 action，忽略
+                continue
+
+            # 检查 proxy_image 是否已加载（可能在快速切换时还未加载）
+            if proxy_image is None:
+                logger.info("Preview request received but proxy not loaded yet. Skipping...")
+                queue_result.put({
+                    'status': 'error',
+                    'message': 'Proxy image not loaded. Waiting for reload_proxy request.',
+                    'skippable': True  # 标记为可跳过的错误（不需要显示给用户）
+                })
                 continue
 
             params = ColorGradingParams.from_dict(request['params'])
@@ -361,6 +391,9 @@ class PreviewWorkerProcess:
         self._last_request_time = 0.0
         self._request_timeout = 300.0  # 300 秒超时
 
+        # proxy_reloaded 回调机制（用于事件驱动的shared memory清理）
+        self._on_proxy_reloaded_callback = None
+
         # Shared memory 泄漏追踪
         self._active_result_shm = set()  # 追踪未清理的 result shared memory
 
@@ -446,6 +479,17 @@ class PreviewWorkerProcess:
                 self.queue_request.put(request_dict, timeout=0.1)
             except:
                 pass
+
+    def set_on_proxy_reloaded_callback(self, callback):
+        """设置 proxy_reloaded 事件的回调函数
+
+        当 worker 进程成功重新加载 proxy 后，会触发此回调
+        用于事件驱动的 shared memory 清理（替代延迟等待）
+
+        Args:
+            callback: 回调函数（无参数）
+        """
+        self._on_proxy_reloaded_callback = callback
 
     def get_memory_usage(self) -> Optional[float]:
         """获取 worker 进程内存使用量（MB）
@@ -642,8 +686,15 @@ class PreviewWorkerProcess:
         if result_info['status'] == 'error':
             return Exception(result_info['message'])
 
-        # 过滤内部消息（不是预览结果）
-        if result_info['status'] in ('proxy_reloaded', 'proxy_reload_skipped', 'memory_info'):
+        # 处理 proxy_reloaded 信号（事件驱动的shared memory清理）
+        if result_info['status'] == 'proxy_reloaded':
+            # Worker 已成功切换到新的 proxy，触发旧 shared memory 的清理
+            if self._on_proxy_reloaded_callback is not None:
+                self._on_proxy_reloaded_callback()
+            return None
+
+        # 过滤其他内部消息（不是预览结果）
+        if result_info['status'] in ('proxy_reload_skipped', 'memory_info'):
             # 内部状态消息，忽略并继续等待预览结果
             # proxy_reload_skipped: 过时的 reload 请求被跳过（快速切换图片时的正常情况）
             return None

@@ -2719,8 +2719,6 @@ class ApplicationContext(QObject):
 
         try:
             from multiprocessing import shared_memory
-            import time
-            import threading
 
             proxy = self._current_proxy
 
@@ -2748,23 +2746,27 @@ class ApplicationContext(QObject):
 
             print(f"[WORKER] Reloaded proxy via hot-reload (shape={proxy.array.shape})")
 
-            # 6. 延迟删除旧的 shared memory（给 worker 足够时间关闭旧引用）
-            # 这个延迟很小（50ms），不会影响用户体验，但能显著降低竞态条件风险
+            # 6. 事件驱动的 shared memory 清理（替代延迟等待）
+            # 当 worker 成功 reload 后，会触发 proxy_reloaded 信号，然后清理旧 shared memory
             if old_shm is not None:
-                def cleanup_old_shm():
-                    """后台清理旧 shared memory"""
-                    time.sleep(0.05)  # 50ms 延迟
-                    try:
-                        old_shm.close()
-                        old_shm.unlink()
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.debug(f"Failed to cleanup old shared memory (may already be closed): {e}")
+                def cleanup_old_shm_callback():
+                    """事件驱动的 shared memory 清理（在 worker 确认 reload 后执行）"""
+                    import threading
+                    def do_cleanup():
+                        try:
+                            old_shm.close()
+                            old_shm.unlink()
+                        except Exception as e:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.debug(f"Failed to cleanup old shared memory (may already be closed): {e}")
 
-                # 使用后台线程清理（避免阻塞主线程）
-                cleanup_thread = threading.Thread(target=cleanup_old_shm, daemon=True)
-                cleanup_thread.start()
+                    # 使用后台线程执行清理（避免阻塞事件循环）
+                    cleanup_thread = threading.Thread(target=do_cleanup, daemon=True)
+                    cleanup_thread.start()
+
+                # 注册回调：在 worker 成功 reload 后清理
+                self._preview_worker_process.set_on_proxy_reloaded_callback(cleanup_old_shm_callback)
 
         except Exception as e:
             import logging

@@ -1935,7 +1935,12 @@ class MainWindow(QMainWindow):
                 f"图像已保存: {Path(file_path).name} "
                 f"({effective_bit_depth}bit, {settings['color_space']})"
             )
-            
+
+            # 刷新当前图像状态，避免导出后的状态问题
+            current_index = self.context.folder_navigator.get_current_index()
+            if current_index >= 0:
+                self.context.folder_navigator.navigate_to_index(current_index, force_reload=True)
+
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存图像失败: {str(e)}")
 
@@ -2010,6 +2015,11 @@ class MainWindow(QMainWindow):
                         export_color_space=settings.get("color_space")
                     )
                 self.statusBar().showMessage(f"已保存所有裁剪到: {target_dir}")
+
+                # 刷新当前图像状态，避免导出后的状态问题
+                current_index = self.context.folder_navigator.get_current_index()
+                if current_index >= 0:
+                    self.context.folder_navigator.navigate_to_index(current_index, force_reload=True)
             else:
                 # 无正式裁剪：若存在 contactsheet 单裁剪，视为一张（编号01）
                 if self.context.get_contactsheet_crop_rect() is not None:
@@ -2069,6 +2079,11 @@ class MainWindow(QMainWindow):
                         export_color_space=settings.get("color_space")
                     )
                     self.statusBar().showMessage(f"已保存: {Path(file_path).name}")
+
+                    # 刷新当前图像状态，避免导出后的状态问题
+                    current_index = self.context.folder_navigator.get_current_index()
+                    if current_index >= 0:
+                        self.context.folder_navigator.navigate_to_index(current_index, force_reload=True)
                 else:
                     self.statusBar().showMessage("没有需要保存的裁剪")
         except Exception as e:
@@ -2078,12 +2093,18 @@ class MainWindow(QMainWindow):
         """执行选择性批量保存 - 通过状态切换+复用单张保存逻辑确保结果一致"""
         from PySide6.QtWidgets import QProgressDialog
         from PySide6.QtCore import Qt
-        
+
         selected_files = settings.get("selected_files", [])
         if not selected_files:
             QMessageBox.information(self, "信息", "没有选择要导出的文件")
             return
-            
+
+        # 保存原始文件路径，用于批量导出后重新加载
+        original_file_path = None
+        original_image = self.context.get_current_image()
+        if original_image:
+            original_file_path = original_image.file_path
+
         # 备份当前Context状态
         backup = self.context.backup_state()
         
@@ -2160,6 +2181,13 @@ class MainWindow(QMainWindow):
         finally:
             # 恢复原始Context状态
             self.context.restore_state(backup)
+
+            # 刷新当前图像状态，避免导出后的状态问题
+            # 使用 navigate_to_index 触发完整的加载流程
+            current_index = self.context.folder_navigator.get_current_index()
+            if current_index >= 0:
+                self.context.folder_navigator.navigate_to_index(current_index, force_reload=True)
+
             progress.close()
 
     def _sort_selected_files_by_tree_order(self, selected_files: set, presets: dict, bundles: dict) -> list:
