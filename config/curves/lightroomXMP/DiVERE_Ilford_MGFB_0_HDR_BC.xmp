@@ -4,7 +4,7 @@
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
    crs:PresetType="Normal"
    crs:Cluster=""
-   crs:UUID="F50F4C43465D4179B4E4EB563157ED1E"
+   crs:UUID="F0D1F2A008D7415587BF43D58DA94969"
    crs:SupportsAmount2="True"
    crs:SupportsAmount="True"
    crs:SupportsColor="True"
@@ -73,23 +73,23 @@
       <rdf:li>0, 0</rdf:li>
       <rdf:li>8, 0</rdf:li>
       <rdf:li>11, 0</rdf:li>
-      <rdf:li>23, 51</rdf:li>
-      <rdf:li>26, 68</rdf:li>
-      <rdf:li>31, 93</rdf:li>
-      <rdf:li>37, 126</rdf:li>
-      <rdf:li>44, 162</rdf:li>
-      <rdf:li>56, 220</rdf:li>
-      <rdf:li>62, 246</rdf:li>
-      <rdf:li>67, 268</rdf:li>
-      <rdf:li>72, 294</rdf:li>
-      <rdf:li>77, 314</rdf:li>
-      <rdf:li>81, 329</rdf:li>
-      <rdf:li>86, 342</rdf:li>
-      <rdf:li>89, 350</rdf:li>
-      <rdf:li>92, 356</rdf:li>
-      <rdf:li>95, 360</rdf:li>
-      <rdf:li>255, 364</rdf:li>
-      <rdf:li>500, 364</rdf:li>
+      <rdf:li>23, 53</rdf:li>
+      <rdf:li>26, 69</rdf:li>
+      <rdf:li>31, 94</rdf:li>
+      <rdf:li>37, 127</rdf:li>
+      <rdf:li>44, 164</rdf:li>
+      <rdf:li>56, 223</rdf:li>
+      <rdf:li>62, 249</rdf:li>
+      <rdf:li>67, 272</rdf:li>
+      <rdf:li>72, 298</rdf:li>
+      <rdf:li>77, 318</rdf:li>
+      <rdf:li>81, 334</rdf:li>
+      <rdf:li>86, 347</rdf:li>
+      <rdf:li>89, 354</rdf:li>
+      <rdf:li>92, 360</rdf:li>
+      <rdf:li>95, 366</rdf:li>
+      <rdf:li>255, 370</rdf:li>
+      <rdf:li>500, 370</rdf:li>
      </rdf:Seq>
     </crs:ToneCurvePV2012Red>
     <crs:ToneCurvePV2012Green>
@@ -97,23 +97,23 @@
       <rdf:li>0, 0</rdf:li>
       <rdf:li>8, 0</rdf:li>
       <rdf:li>11, 0</rdf:li>
-      <rdf:li>23, 51</rdf:li>
-      <rdf:li>26, 68</rdf:li>
-      <rdf:li>31, 93</rdf:li>
-      <rdf:li>37, 126</rdf:li>
-      <rdf:li>44, 162</rdf:li>
-      <rdf:li>56, 220</rdf:li>
-      <rdf:li>62, 246</rdf:li>
-      <rdf:li>67, 268</rdf:li>
-      <rdf:li>72, 294</rdf:li>
-      <rdf:li>77, 314</rdf:li>
-      <rdf:li>81, 329</rdf:li>
-      <rdf:li>86, 342</rdf:li>
-      <rdf:li>89, 350</rdf:li>
-      <rdf:li>92, 356</rdf:li>
-      <rdf:li>95, 360</rdf:li>
-      <rdf:li>255, 364</rdf:li>
-      <rdf:li>500, 364</rdf:li>
+      <rdf:li>23, 53</rdf:li>
+      <rdf:li>26, 69</rdf:li>
+      <rdf:li>31, 94</rdf:li>
+      <rdf:li>37, 127</rdf:li>
+      <rdf:li>44, 164</rdf:li>
+      <rdf:li>56, 223</rdf:li>
+      <rdf:li>62, 249</rdf:li>
+      <rdf:li>67, 272</rdf:li>
+      <rdf:li>72, 298</rdf:li>
+      <rdf:li>77, 318</rdf:li>
+      <rdf:li>81, 334</rdf:li>
+      <rdf:li>86, 347</rdf:li>
+      <rdf:li>89, 354</rdf:li>
+      <rdf:li>92, 360</rdf:li>
+      <rdf:li>95, 366</rdf:li>
+      <rdf:li>255, 370</rdf:li>
+      <rdf:li>500, 370</rdf:li>
      </rdf:Seq>
     </crs:ToneCurvePV2012Green>
     <crs:ToneCurvePV2012Blue>
@@ -121,23 +121,23 @@
       <rdf:li>0, 0</rdf:li>
       <rdf:li>8, 0</rdf:li>
       <rdf:li>11, 0</rdf:li>
-      <rdf:li>23, 51</rdf:li>
-      <rdf:li>26, 68</rdf:li>
-      <rdf:li>31, 93</rdf:li>
-      <rdf:li>37, 126</rdf:li>
-      <rdf:li>44, 162</rdf:li>
-      <rdf:li>56, 220</rdf:li>
-      <rdf:li>62, 246</rdf:li>
-      <rdf:li>67, 268</rdf:li>
-      <rdf:li>72, 294</rdf:li>
-      <rdf:li>77, 314</rdf:li>
-      <rdf:li>81, 329</rdf:li>
-      <rdf:li>86, 342</rdf:li>
-      <rdf:li>89, 350</rdf:li>
-      <rdf:li>92, 356</rdf:li>
-      <rdf:li>95, 360</rdf:li>
-      <rdf:li>255, 364</rdf:li>
-      <rdf:li>500, 364</rdf:li>
+      <rdf:li>23, 53</rdf:li>
+      <rdf:li>26, 69</rdf:li>
+      <rdf:li>31, 94</rdf:li>
+      <rdf:li>37, 127</rdf:li>
+      <rdf:li>44, 164</rdf:li>
+      <rdf:li>56, 223</rdf:li>
+      <rdf:li>62, 249</rdf:li>
+      <rdf:li>67, 272</rdf:li>
+      <rdf:li>72, 298</rdf:li>
+      <rdf:li>77, 318</rdf:li>
+      <rdf:li>81, 334</rdf:li>
+      <rdf:li>86, 347</rdf:li>
+      <rdf:li>89, 354</rdf:li>
+      <rdf:li>92, 360</rdf:li>
+      <rdf:li>95, 366</rdf:li>
+      <rdf:li>255, 370</rdf:li>
+      <rdf:li>500, 370</rdf:li>
      </rdf:Seq>
     </crs:ToneCurvePV2012Blue>
   </rdf:Description>
