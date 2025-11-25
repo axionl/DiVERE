@@ -41,13 +41,14 @@ class I18nManager:
         发现所有可用的语言文件
 
         在以下位置查找 *.json 文件：
-        - 开发环境：divere/i18n/*.json
+        - 开发环境：divere/assets/i18n/*.json
         - 打包环境：通过 PathManager 查找
         """
-        # 方法1：直接从当前模块目录查找
+        # 方法1：直接从assets/i18n目录查找
         try:
-            current_dir = Path(__file__).parent
-            lang_files = list(current_dir.glob("*.json"))
+            # 从当前模块目录（divere/i18n/）向上，然后到assets/i18n
+            i18n_dir = Path(__file__).parent.parent / "assets" / "i18n"
+            lang_files = list(i18n_dir.glob("*.json")) if i18n_dir.exists() else []
 
             for lang_file in lang_files:
                 lang_code = lang_file.stem  # zh_CN, en_US 等
@@ -141,10 +142,10 @@ class I18nManager:
             lang_file = path_manager.find_file(filename, "i18n")
 
             if not lang_file:
-                # 尝试直接从模块目录查找
+                # 尝试直接从assets/i18n目录查找
                 try:
-                    module_dir = Path(__file__).parent
-                    lang_file = module_dir / filename
+                    i18n_dir = Path(__file__).parent.parent / "assets" / "i18n"
+                    lang_file = i18n_dir / filename
                     if not lang_file.exists():
                         lang_file = None
                 except Exception:
