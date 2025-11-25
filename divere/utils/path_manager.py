@@ -33,7 +33,8 @@ class PathManager:
             "matrices": [],
             "assets": [],
             "models": [],
-            "test_data": []
+            "test_data": [],
+            "i18n": []
         }
         self._initialized = False
         self._initialize_paths()
@@ -114,10 +115,15 @@ class PathManager:
         self._paths["test_data"].extend([
             os.path.join(project_root, "test_scans")
         ])
-        
+
+        # i18n 路径
+        self._paths["i18n"].extend([
+            os.path.join(project_root, "divere", "assets", "i18n")
+        ])
+
         # 添加所有路径到Python路径
         self._add_all_paths()
-        
+
         self._initialized = True
     
     def _initialize_pyinstaller_paths(self):
@@ -204,10 +210,16 @@ class PathManager:
             os.path.join(base_dir, "test_scans"),
             os.path.join(base_dir, "_internal", "test_scans")
         ])
-        
+
+        # i18n 路径
+        self._paths["i18n"].extend([
+            os.path.join(base_dir, "assets", "i18n"),
+            os.path.join(base_dir, "_internal", "assets", "i18n")
+        ])
+
         # 添加所有路径到Python路径
         self._add_all_paths()
-        
+
         self._initialized = True
         
         # 调试输出：显示实际存在的路径
@@ -322,10 +334,18 @@ class PathManager:
             os.path.join(bundle_contents, "Resources", "test_scans")
         ]
         self._paths["test_data"].extend(test_data_candidates)
-        
+
+        # i18n 路径
+        i18n_candidates = [
+            os.path.join(executable_dir, "assets", "i18n"),
+            os.path.join(bundle_contents, "Resources", "assets", "i18n"),
+            os.path.join(executable_dir, "divere", "assets", "i18n")
+        ]
+        self._paths["i18n"].extend(i18n_candidates)
+
         # 添加所有路径到Python路径
         self._add_all_paths()
-        
+
         self._initialized = True
     
     def _get_project_root(self) -> str:

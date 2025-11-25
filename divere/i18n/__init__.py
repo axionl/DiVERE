@@ -68,44 +68,29 @@ class I18nManager:
         except Exception as e:
             print(f"[i18n] 语言发现失败: {e}")
 
-        # 方法2：通过 PathManager 查找（打包环境）
-        # 为 i18n 添加路径类别
-        if hasattr(path_manager, '_paths') and 'i18n' not in path_manager._paths:
-            # 添加 i18n 路径到 PathManager
-            try:
-                # 获取当前模块的可能路径
-                possible_paths = [
-                    os.path.join(path_manager._get_project_root(), "divere", "assets", "i18n"),
-                ]
-
-                # 打包环境路径
-                if path_manager._is_pyinstaller_bundle():
-                    bundle_dir = path_manager._get_pyinstaller_root()
-                    possible_paths.extend([
-                        os.path.join(bundle_dir, "divere", "assets", "i18n"),
-                        os.path.join(bundle_dir, "i18n"),
-                        os.path.join(bundle_dir, "_internal", "divere", "assets", "i18n"),
-                        os.path.join(bundle_dir, "_internal", "i18n")
-                    ])
-
-                # macOS app bundle 路径
-                elif path_manager._is_macos_app_bundle():
-                    executable_dir = path_manager._get_app_bundle_root()
-                    bundle_contents = os.path.dirname(executable_dir)
-                    possible_paths.extend([
-                        os.path.join(executable_dir, "divere", "assets", "i18n"),
-                        os.path.join(executable_dir, "assets", "i18n"),
-                        os.path.join(bundle_contents, "Resources", "divere", "assets", "i18n"),
-                        os.path.join(bundle_contents, "Resources", "assets", "i18n")
-                    ])
-
-                # 将路径添加到 PathManager
-                for p in possible_paths:
-                    if os.path.exists(p):
-                        path_manager.add_path("i18n", p)
-
-            except Exception as e:
-                print(f"[i18n] 添加 i18n 路径到 PathManager 失败: {e}")
+        # 方法2：通过 PathManager 查找（打包环境和开发环境）
+        # PathManager 已经在初始化时注册了 i18n 路径，直接使用
+        try:
+            i18n_paths = path_manager.get_paths("i18n")
+            for i18n_path in i18n_paths:
+                if os.path.exists(i18n_path):
+                    for lang_file in Path(i18n_path).glob("*.json"):
+                        lang_code = lang_file.stem
+                        # 避免重复添加
+                        if not any(lang["code"] == lang_code for lang in self._available_languages):
+                            try:
+                                with open(lang_file, 'r', encoding='utf-8') as f:
+                                    data = json.load(f)
+                                    lang_name = data.get("meta", {}).get("language", lang_code)
+                                    self._available_languages.append({
+                                        "code": lang_code,
+                                        "name": lang_name,
+                                        "path": str(lang_file)
+                                    })
+                            except Exception as e:
+                                print(f"[i18n] 无法读取语言文件 {lang_file}: {e}")
+        except Exception as e:
+            print(f"[i18n] 通过 PathManager 查找语言文件失败: {e}")
 
         # 如果没有发现任何语言，添加默认的中文和英文占位
         if not self._available_languages:
@@ -139,16 +124,6 @@ class I18nManager:
             # 尝试通过 PathManager 查找
             filename = f"{lang_code}.json"
             lang_file = path_manager.find_file(filename, "i18n")
-
-            if not lang_file:
-                # 尝试直接从assets/i18n目录查找
-                try:
-                    i18n_dir = Path(__file__).parent.parent / "assets" / "i18n"
-                    lang_file = i18n_dir / filename
-                    if not lang_file.exists():
-                        lang_file = None
-                except Exception:
-                    lang_file = None
 
         if not lang_file:
             print(f"[i18n] 找不到语言文件: {lang_code}")

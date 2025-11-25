@@ -18,7 +18,7 @@
     "use_process_isolation": "auto",
     "worker_memory_threshold_mb": 4000,
     "theme": "dark",
-    "language": "zh_CN"
+    "language": "en_US"
   },
   "defaults": {
     "input_color_space": "sRGB",
