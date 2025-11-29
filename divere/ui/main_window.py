@@ -1614,120 +1614,80 @@ class MainWindow(QMainWindow):
         return x_norm, y_norm
 
     def _extract_original_colorchecker_patches(self):
-        """从pipeline处理后的图像中读取色卡区域的working space RGB值"""
+        """从原图中读取色卡区域的working space RGB值
+
+        使用与优化流程相同的提取逻辑（extractor.py），确保坐标系统一致。
+        """
         try:
             import numpy as np
-            import cv2
-            from copy import deepcopy
-            
+            from divere.utils.ccm_optimizer.extractor import extract_colorchecker_patches
+
             # 检查必要条件
-            if not (self.preview_widget.cc_enabled and 
-                    self.preview_widget.cc_corners_norm and 
+            if not (self.preview_widget.cc_enabled and
+                    self.preview_widget.cc_corners_norm and
                     self.context.get_current_image()):
                 return None
-            
-            # 获取当前proxy图像和参数
-            proxy_image = self.context._current_proxy
-            if proxy_image is None:
+
+            # 获取原图
+            source_image = self.context._current_image
+            if not (source_image and source_image.array is not None):
                 return None
-                
-            current_params = deepcopy(self.context.get_current_params())
-            
-            # 通过pipeline处理图像，获取working space RGB
-            processed_image = self.context.the_enlarger.apply_full_pipeline(
-                proxy_image, 
-                current_params,
-                convert_to_monochrome_in_idt=self.context.should_convert_to_monochrome(),
-                monochrome_converter=self.context.color_space_manager.convert_to_monochrome if self.context.should_convert_to_monochrome() else None
-            )
-            
-            # 获取处理后的图像数组
-            processed_array = processed_image.array
-            if processed_array is None:
-                return None
-            
-            # 确保数据为float32格式
-            if processed_array.dtype == np.uint8:
-                processed_array = processed_array.astype(np.float32) / 255.0
+
+            source_array = source_image.array
+
+            # 确保数据为float32格式 [0.0, 1.0]
+            if source_array.dtype == np.uint8:
+                source_array = source_array.astype(np.float32) / 255.0
+            elif source_array.dtype == np.uint16:
+                source_array = source_array.astype(np.float32) / 65535.0
             else:
-                processed_array = np.clip(processed_array, 0.0, 1.0).astype(np.float32)
-            
-            # 获取处理后（已旋转）的图像尺寸
-            H_img, W_img = processed_array.shape[:2]
+                source_array = np.clip(source_array, 0.0, 1.0).astype(np.float32)
+
+            # 获取当前输入空间的gamma（与优化流程一致）
+            cs_name = self.context.get_input_color_space()
+            cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+            input_gamma = float(cs_info.get("gamma", 1.0))
+
+            # 应用gamma逆变换到线性空间（与优化流程中的_to_linear_image_array相同）
+            linear_array = np.power(np.clip(source_array, 0.0, 1.0), input_gamma)
 
             # 获取色卡角点的归一化坐标（相对原图）
             cc_corners_norm = self.preview_widget.cc_corners_norm
 
-            # 获取当前旋转角度
-            global_orientation = self.context.get_current_orientation()
+            # 直接转换归一化坐标为原图像素坐标（与优化流程一致）
+            cc_corners_source = self.preview_widget._norm_to_source_coords(cc_corners_norm)
+            if not cc_corners_source:
+                print("无法转换归一化坐标为原图坐标")
+                return None
 
-            # 关键修复：proxy_image 已经被旋转，processed_array 也已旋转
-            # 需要将归一化坐标从原图坐标系旋转到processed_array坐标系
-            # 然后直接乘以processed_array的尺寸
-            corners_img = []
-            for x_norm, y_norm in cc_corners_norm:
-                # 先旋转归一化坐标到旋转后的坐标系
-                if global_orientation % 360 != 0:
-                    x_norm_rot, y_norm_rot = self._rotate_normalized_coords(
-                        x_norm, y_norm, global_orientation
-                    )
-                else:
-                    x_norm_rot, y_norm_rot = x_norm, y_norm
+            # 使用extractor.py提取色块（与优化流程完全相同的逻辑）
+            # margin=0.18 与原来保持一致，但改为 1-0.18*2=0.64 即采样中心64%区域
+            # extractor.py的sample_margin定义为采样区域占色块的比例
+            # 原代码的margin=0.18表示边界各留18%，中心采样64%
+            # 因此sample_margin = 0.64
+            patches_rgb_dict = extract_colorchecker_patches(
+                linear_array,
+                cc_corners_source,
+                sample_margin=0.64  # 中心64%区域采样
+            )
 
-                # 再乘以旋转后图像的尺寸得到像素坐标
-                x_img = x_norm_rot * W_img
-                y_img = y_norm_rot * H_img
-
-                corners_img.append([x_img, y_img])
-            
-            # 计算透视变换矩阵
-            src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
-            dst = np.array(corners_img, dtype=np.float32)
-            H = cv2.getPerspectiveTransform(src, dst)
-            
-            # 提取24个色块
-            margin = 0.18  # 边距，避免边界污染
-            rgb_list = []
-            
-            # 按4行6列提取色块
-            for r in range(4):
-                for c in range(6):
-                    # 计算色块在归一化坐标系中的位置
-                    gx0 = c / 6.0
-                    gx1 = (c + 1) / 6.0
-                    gy0 = r / 4.0
-                    gy1 = (r + 1) / 4.0
-                    
-                    # 应用边距
-                    sx0 = gx0 + margin * (gx1 - gx0)
-                    sx1 = gx1 - margin * (gx1 - gx0)
-                    sy0 = gy0 + margin * (gy1 - gy0)
-                    sy1 = gy1 - margin * (gy1 - gy0)
-                    
-                    # 变换到图像坐标系
-                    rect = np.array([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]], dtype=np.float32)
-                    rect_h = np.hstack([rect, np.ones((4, 1), dtype=np.float32)])
-                    poly = (H @ rect_h.T).T
-                    poly = poly[:, :2] / poly[:, 2:3]
-                    
-                    # 转换为整数坐标并创建掩码
-                    poly_int = np.round(poly).astype(np.int32)
-                    mask = np.zeros((H_img, W_img), dtype=np.uint8)
-                    cv2.fillPoly(mask, [poly_int], 255)
-                    
-                    # 提取色块的平均RGB值（pipeline处理后的working space RGB）
-                    m = mask.astype(bool)
-                    if not np.any(m):
-                        rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            # 将字典格式转换为数组（按A1-D6顺序）
+            rgb_patches = []
+            for row in ['A', 'B', 'C', 'D']:
+                for col in range(1, 7):
+                    patch_id = f"{row}{col}"
+                    if patch_id in patches_rgb_dict:
+                        rgb_patches.append(patches_rgb_dict[patch_id])
                     else:
-                        rgb = processed_array[m].reshape(-1, processed_array.shape[2]).mean(axis=0)
-                    
-                    rgb_list.append(rgb.astype(np.float32))
-            
-            return np.stack(rgb_list, axis=0)
-            
+                        print(f"警告: 色块 {patch_id} 未提取到，使用默认值")
+                        rgb_patches.append((0.0, 0.0, 0.0))
+
+            return np.array(rgb_patches, dtype=np.float32)
+
         except Exception as e:
-            print(f"提取pipeline处理后色卡色块失败: {e}")
+            print(f"提取色卡色块失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _initialize_color_space_info(self):
