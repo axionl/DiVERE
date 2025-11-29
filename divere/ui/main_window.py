@@ -1047,29 +1047,44 @@ class MainWindow(QMainWindow):
         if not (current_image and current_image.array is not None):
             QMessageBox.warning(self, "提示", "请先打开一张图片")
             return
-        
+
         # 使用原图进行优化
         source_image = self.context._current_image  # 直接访问原图
         if not (source_image and source_image.array is not None):
             QMessageBox.warning(self, "提示", "无法获取源图像数据")
             return
-            
+
+        print("[DEBUG-OPT] ========== 优化流程开始 ==========")
+        print(f"[DEBUG-OPT] 原图尺寸: {source_image.array.shape}, dtype: {source_image.array.dtype}")
+        print(f"[DEBUG-OPT] 原图 (width, height): ({source_image.width}, {source_image.height})")
+
         # 获取当前输入空间 gamma（若取不到，退化为1.0）
         cs_name = self.context.get_input_color_space()
         cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
         input_gamma = float(cs_info.get("gamma", 1.0))
+        print(f"[DEBUG-OPT] 输入色彩空间: {cs_name}, gamma: {input_gamma}")
 
         # 取色卡角点（归一化坐标）
         cc_corners_norm = getattr(self.preview_widget, 'cc_corners_norm', None)
         if not cc_corners_norm or len(cc_corners_norm) != 4:
             QMessageBox.information(self, "提示", "请在预览中启用色卡选择器并设置四角点")
             return
-            
+
+        print(f"[DEBUG-OPT] 归一化角点: {cc_corners_norm}")
+
+        # 获取source_wh用于调试
+        if self.preview_widget.current_image and self.preview_widget.current_image.metadata:
+            source_wh = self.preview_widget.current_image.metadata.get('source_wh')
+            print(f"[DEBUG-OPT] metadata中的source_wh: {source_wh}")
+
         # 直接使用归一化坐标转换为原图像素坐标
         cc_corners_source = self.preview_widget._norm_to_source_coords(cc_corners_norm)
         if not cc_corners_source:
             QMessageBox.warning(self, "错误", "无法获取源图像坐标")
             return
+
+        print(f"[DEBUG-OPT] 原图像素角点: {cc_corners_source}")
+        print("[DEBUG-OPT] =========================================")
 
         # 获取光谱锐化（硬件校正）配置
         sharpening_config = self.parameter_panel.get_spectral_sharpening_config()
@@ -1616,7 +1631,8 @@ class MainWindow(QMainWindow):
     def _extract_original_colorchecker_patches(self):
         """从原图中读取色卡区域的working space RGB值
 
-        使用与优化流程相同的提取逻辑（extractor.py），确保坐标系统一致。
+        读取经过完整pipeline处理后（IDT、密度反转、矩阵校正、RGB增益、密度曲线）
+        但仍在working space (ACEScg Linear)中的数据，与preview显示前的状态一致。
         """
         try:
             import numpy as np
@@ -1626,50 +1642,77 @@ class MainWindow(QMainWindow):
             if not (self.preview_widget.cc_enabled and
                     self.preview_widget.cc_corners_norm and
                     self.context.get_current_image()):
+                print("[DEBUG] 提取失败: cc_enabled={}, cc_corners_norm={}, current_image={}".format(
+                    self.preview_widget.cc_enabled,
+                    self.preview_widget.cc_corners_norm is not None,
+                    self.context.get_current_image() is not None
+                ))
                 return None
 
             # 获取原图
             source_image = self.context._current_image
             if not (source_image and source_image.array is not None):
+                print("[DEBUG] 提取失败: source_image 不可用")
                 return None
 
-            source_array = source_image.array
+            print(f"[DEBUG] 原图尺寸: {source_image.array.shape}, dtype: {source_image.array.dtype}")
+            print(f"[DEBUG] 原图 (width, height): ({source_image.width}, {source_image.height})")
 
-            # 确保数据为float32格式 [0.0, 1.0]
-            if source_array.dtype == np.uint8:
-                source_array = source_array.astype(np.float32) / 255.0
-            elif source_array.dtype == np.uint16:
-                source_array = source_array.astype(np.float32) / 65535.0
-            else:
-                source_array = np.clip(source_array, 0.0, 1.0).astype(np.float32)
+            # 获取当前参数
+            params = self.context.get_current_params()
+            print(f"[DEBUG] 应用pipeline处理，params: enable_density_inversion={params.enable_density_inversion}, "
+                  f"enable_density_matrix={params.enable_density_matrix}, "
+                  f"enable_rgb_gains={params.enable_rgb_gains}, "
+                  f"enable_density_curve={params.enable_density_curve}")
 
-            # 获取当前输入空间的gamma（与优化流程一致）
-            cs_name = self.context.get_input_color_space()
-            cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
-            input_gamma = float(cs_info.get("gamma", 1.0))
+            # 应用完整pipeline获取working space数据
+            # 这会应用IDT、密度反转、矩阵校正、RGB增益、密度曲线，但不应用ODT
+            # 结果是ACEScg Linear工作空间中的数据
+            working_space_image = self.context.the_enlarger.apply_full_pipeline(
+                source_image,
+                params,
+                include_curve=params.enable_density_curve,
+                for_export=False,  # 不需要全精度分块处理
+                chunked=False  # 不分块，直接处理
+            )
 
-            # 应用gamma逆变换到线性空间（与优化流程中的_to_linear_image_array相同）
-            linear_array = np.power(np.clip(source_array, 0.0, 1.0), input_gamma)
+            if not (working_space_image and working_space_image.array is not None):
+                print("[DEBUG] 提取失败: pipeline处理后的图像不可用")
+                return None
+
+            working_array = working_space_image.array
+            print(f"[DEBUG] Pipeline处理后尺寸: {working_array.shape}, dtype: {working_array.dtype}")
 
             # 获取色卡角点的归一化坐标（相对原图）
             cc_corners_norm = self.preview_widget.cc_corners_norm
+            print(f"[DEBUG] 归一化角点: {cc_corners_norm}")
 
-            # 直接转换归一化坐标为原图像素坐标（与优化流程一致）
+            # 获取source_wh用于调试
+            if self.preview_widget.current_image and self.preview_widget.current_image.metadata:
+                source_wh = self.preview_widget.current_image.metadata.get('source_wh')
+                print(f"[DEBUG] metadata中的source_wh: {source_wh}")
+
+            # 直接转换归一化坐标为原图像素坐标
             cc_corners_source = self.preview_widget._norm_to_source_coords(cc_corners_norm)
             if not cc_corners_source:
-                print("无法转换归一化坐标为原图坐标")
+                print("[DEBUG] 无法转换归一化坐标为原图坐标")
                 return None
 
-            # 使用extractor.py提取色块（与优化流程完全相同的逻辑）
-            # margin=0.18 与原来保持一致，但改为 1-0.18*2=0.64 即采样中心64%区域
-            # extractor.py的sample_margin定义为采样区域占色块的比例
-            # 原代码的margin=0.18表示边界各留18%，中心采样64%
-            # 因此sample_margin = 0.64
+            print(f"[DEBUG] 原图像素角点: {cc_corners_source}")
+
+            # 使用extractor.py提取色块
+            # 从working space (ACEScg Linear)数据中提取，而不是原始gamma转换后的数据
+            # 使用默认的sample_margin=0.3
             patches_rgb_dict = extract_colorchecker_patches(
-                linear_array,
+                working_array,  # 使用pipeline处理后的working space数据
                 cc_corners_source,
-                sample_margin=0.64  # 中心64%区域采样
+                sample_margin=0.3
             )
+
+            print(f"[DEBUG] 提取到 {len(patches_rgb_dict)} 个色块")
+            # 打印前几个色块的值用于调试
+            for i, (patch_id, rgb) in enumerate(list(patches_rgb_dict.items())[:3]):
+                print(f"[DEBUG] {patch_id}: RGB=({rgb[0]:.4f}, {rgb[1]:.4f}, {rgb[2]:.4f})")
 
             # 将字典格式转换为数组（按A1-D6顺序）
             rgb_patches = []
@@ -1679,13 +1722,13 @@ class MainWindow(QMainWindow):
                     if patch_id in patches_rgb_dict:
                         rgb_patches.append(patches_rgb_dict[patch_id])
                     else:
-                        print(f"警告: 色块 {patch_id} 未提取到，使用默认值")
+                        print(f"[DEBUG] 警告: 色块 {patch_id} 未提取到，使用默认值")
                         rgb_patches.append((0.0, 0.0, 0.0))
 
             return np.array(rgb_patches, dtype=np.float32)
 
         except Exception as e:
-            print(f"提取色卡色块失败: {e}")
+            print(f"[DEBUG] 提取色卡色块失败: {e}")
             import traceback
             traceback.print_exc()
             return None
