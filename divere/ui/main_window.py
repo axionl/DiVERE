@@ -1058,6 +1058,9 @@ class MainWindow(QMainWindow):
         print(f"[DEBUG-OPT] 原图尺寸: {source_image.array.shape}, dtype: {source_image.array.dtype}")
         print(f"[DEBUG-OPT] 原图 (width, height): ({source_image.width}, {source_image.height})")
 
+        # 调用调试函数查看坐标信息
+        self.preview_widget._debug_colorchecker_coords()
+
         # 获取当前输入空间 gamma（若取不到，退化为1.0）
         cs_name = self.context.get_input_color_space()
         cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
@@ -1391,8 +1394,8 @@ class MainWindow(QMainWindow):
                     "G": [float(primaries_dict['G'][0]), float(primaries_dict['G'][1])],
                     "B": [float(primaries_dict['B'][0]), float(primaries_dict['B'][1])],
                 },
-                # 采用D65与 gamma=1.0（扫描线性）
-                "white_point": [0.3127, 0.3290],
+                # 采用D60与 gamma=1.0（扫描线性）
+                "white_point": [0.32168, 0.33767],
                 "gamma": 1.0,
             }
             
@@ -1657,6 +1660,9 @@ class MainWindow(QMainWindow):
 
             print(f"[DEBUG] 原图尺寸: {source_image.array.shape}, dtype: {source_image.array.dtype}")
             print(f"[DEBUG] 原图 (width, height): ({source_image.width}, {source_image.height})")
+
+            # 调用调试函数查看坐标信息
+            self.preview_widget._debug_colorchecker_coords()
 
             # 获取当前参数
             params = self.context.get_current_params()

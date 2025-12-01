@@ -571,6 +571,58 @@ class PreviewWidget(QWidget):
             return int(source_wh[0]), int(source_wh[1])
         return None
 
+    def _debug_colorchecker_coords(self):
+        """调试色卡坐标转换 - 打印关键信息以诊断问题"""
+        print("=" * 80)
+        print("ColorChecker 坐标调试信息")
+        print("=" * 80)
+
+        # 1. 归一化坐标
+        print(f"[CC-DEBUG] cc_corners_norm: {self.cc_corners_norm}")
+
+        # 2. 原图信息
+        if self.current_image and self.current_image.metadata:
+            source_wh = self.current_image.metadata.get('source_wh')
+            print(f"[CC-DEBUG] source_wh (from metadata): {source_wh}")
+            print(f"[CC-DEBUG] global_orientation: {self.current_image.metadata.get('global_orientation')}")
+            print(f"[CC-DEBUG] crop_focused: {self.current_image.metadata.get('crop_focused')}")
+
+            crop_instance = self.current_image.metadata.get('crop_instance')
+            if crop_instance:
+                print(f"[CC-DEBUG] crop rect_norm: {crop_instance.rect_norm}")
+                print(f"[CC-DEBUG] crop orientation: {crop_instance.orientation}")
+                # 计算crop在原图中的像素边界
+                if source_wh:
+                    x, y, w, h = crop_instance.rect_norm
+                    src_w, src_h = source_wh
+                    crop_left = x * src_w
+                    crop_top = y * src_h
+                    crop_width = w * src_w
+                    crop_height = h * src_h
+                    print(f"[CC-DEBUG] crop pixel bounds: left={crop_left:.1f}, top={crop_top:.1f}, "
+                          f"width={crop_width:.1f}, height={crop_height:.1f}")
+
+        # 3. 显示图像信息
+        if self.current_image:
+            disp_h, disp_w = self.current_image.array.shape[:2]
+            print(f"[CC-DEBUG] display image size: {disp_w} x {disp_h}")
+
+        # 4. 坐标转换结果
+        if self.cc_corners_norm:
+            source_coords = self._norm_to_source_coords(self.cc_corners_norm)
+            print(f"[CC-DEBUG] source_coords (原图像素坐标):")
+            if source_coords:
+                for i, (sx, sy) in enumerate(source_coords):
+                    print(f"[CC-DEBUG]   角点{i}: ({sx:.1f}, {sy:.1f})")
+
+            display_coords = self._norm_to_display_coords(self.cc_corners_norm)
+            print(f"[CC-DEBUG] display_coords (显示像素坐标):")
+            if display_coords:
+                for i, (dx, dy) in enumerate(display_coords):
+                    print(f"[CC-DEBUG]   角点{i}: ({dx:.1f}, {dy:.1f})")
+
+        print("=" * 80)
+
     def _norm_to_display_coords(self, norm_corners) -> Optional[List[Tuple[float, float]]]:
         """归一化坐标 → 显示像素坐标"""
         if not norm_corners or not self.current_image:
@@ -3235,20 +3287,29 @@ class PreviewWidget(QWidget):
                 
                 # 当前显示图像的尺寸
                 disp_h, disp_w = self.current_image.array.shape[:2]
-                
-                # 处理crop的独立orientation
+
+                # 步骤1：显示坐标 → crop逻辑坐标（未旋转）
                 if crop_instance.orientation % 360 != 0:
                     # 将显示坐标映射到crop前的坐标（逆旋转）
                     crop_x, crop_y = self._reverse_rotate_point(
                         img_x, img_y, disp_w, disp_h, crop_instance.orientation
                     )
-                    # 映射回原图：crop坐标 → 原图坐标
-                    orig_x = crop_left + (crop_x * crop_width / disp_w)
-                    orig_y = crop_top + (crop_y * crop_height / disp_h)
+                    # 确定未旋转crop的显示尺寸
+                    # 90°/270°旋转时，未旋转的宽度 = 旋转后的高度
+                    if crop_instance.orientation % 180 == 0:  # 0°或180°
+                        unrot_w, unrot_h = disp_w, disp_h
+                    else:  # 90°或270°（宽高交换）
+                        unrot_w, unrot_h = disp_h, disp_w
                 else:
-                    # 无旋转：直接映射
-                    orig_x = crop_left + (img_x * crop_width / disp_w)
-                    orig_y = crop_top + (img_y * crop_height / disp_h)
+                    # 无旋转：直接使用显示坐标
+                    crop_x, crop_y = img_x, img_y
+                    unrot_w, unrot_h = disp_w, disp_h
+
+                # 步骤2：crop逻辑坐标 → 原图坐标
+                # crop_x ∈ [0, unrot_w), crop_y ∈ [0, unrot_h)
+                # 缩放比例 = crop原图尺寸 / crop显示尺寸
+                orig_x = crop_left + (crop_x * crop_width / unrot_w)
+                orig_y = crop_top + (crop_y * crop_height / unrot_h)
                 
                 return (orig_x, orig_y)
             else:
